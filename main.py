@@ -26,7 +26,9 @@ from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import RetryAfter, Forbidden, BadRequest
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+)
 
 from config import (
     TOKEN, CHANNEL, CHANNEL_ID, BOT_USERNAME, ADMIN_IDS,
@@ -449,26 +451,81 @@ async def start_command(update, context):
     await asyncio.gather(*send_tasks, return_exceptions=True)
 
     if sent_ids:
+        media_message_ids = list(sent_ids)
+        expiry_notice_id = None
         try:
             msg = await update.message.reply_text(
                 f"⌛ {len(sent_ids)} media akan terhapus otomatis dalam 1 jam."
             )
-            sent_ids.append(msg.message_id)
-        except:
-            pass
+            expiry_notice_id = msg.message_id
+        except Exception as e:
+            logger.warning(f"Could not send expiry notice to {uid}: {e}")
 
         async def delete_later():
             try:
                 await asyncio.sleep(AUTO_DELETE_TIMEOUT)
-                for mid in sent_ids:
+                deleted_media_count = 0
+                for mid in media_message_ids:
                     try:
-                        await context.bot.delete_message(uid, mid)
-                    except:
-                        pass
-            except:
-                pass
+                        deleted = await context.bot.delete_message(uid, mid)
+                        if deleted:
+                            deleted_media_count += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not delete media message {mid} for {uid}: {e}"
+                        )
+
+                if expiry_notice_id:
+                    try:
+                        await context.bot.delete_message(uid, expiry_notice_id)
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not delete expiry notice {expiry_notice_id} "
+                            f"for {uid}: {e}"
+                        )
+
+                if media_message_ids and deleted_media_count == len(media_message_ids):
+                    keyboard = InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "📥 Ambil File Lagi",
+                            url=f"https://t.me/{BOT_USERNAME}?start={code}"
+                        ),
+                        InlineKeyboardButton(
+                            "✖ Tutup",
+                            callback_data=f"expired_close:{uid}"
+                        )
+                    ]])
+                    await context.bot.send_message(
+                        uid,
+                        "📌 <b>File Telah Dihapus Otomatis</b>\n\n"
+                        "File sebelumnya sudah dihapus sesuai pengaturan auto delete.\n\n"
+                        "Tekan tombol <b>Ambil File Lagi</b> jika ingin membuka "
+                        "ulang file tersebut.",
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
+            except Exception as e:
+                logger.error(f"Auto-delete task failed for {uid}: {e}")
 
         context.application.create_task(delete_later())
+
+async def close_expired_notification(update, context):
+    query = update.callback_query
+    try:
+        owner_id = int(query.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await query.answer("Notifikasi tidak valid.", show_alert=True)
+        return
+
+    if query.from_user.id != owner_id:
+        await query.answer("Notifikasi ini bukan milik Anda.", show_alert=True)
+        return
+
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception as e:
+        logger.warning(f"Could not close expired notification for {owner_id}: {e}")
 
 async def send_media_item(bot, uid, file_id, media_type, caption, sent_ids):
     try:
@@ -1523,6 +1580,10 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_error_handler(error_handler)
 
         application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CallbackQueryHandler(
+            close_expired_notification,
+            pattern=r"^expired_close:\d+$"
+        ))
         application.add_handler(CommandHandler("bc", broadcast_command))
         application.add_handler(CommandHandler("bc_cancel", bc_cancel_command))
         application.add_handler(CommandHandler("bc_schedule", bc_schedule_command))
