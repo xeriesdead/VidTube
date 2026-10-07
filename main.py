@@ -503,7 +503,7 @@ async def start_command(update, context):
             "👋 Halo! Saya bot media sharing.\n\n"
             "Untuk membuka media, gunakan link yang diberikan admin.\n\n"
             f"📢 Join channel: {CHANNEL}\n"
-            "🎁 Cek kuota harian: /profile"
+            "🎁 Cek kuota harian: /quota"
         )
         return
 
@@ -1904,6 +1904,7 @@ async def lifespan(fastapi_app: FastAPI):
             pattern=r"^claim_quota:\d{4}-\d{2}-\d{2}:\d+$"
         ))
         application.add_handler(CommandHandler("profile", profile_command))
+        application.add_handler(CommandHandler("quota", profile_command))
         application.add_handler(CommandHandler("bc", broadcast_command))
         application.add_handler(CommandHandler("bc_cancel", bc_cancel_command))
         application.add_handler(CommandHandler("bc_schedule", bc_schedule_command))
