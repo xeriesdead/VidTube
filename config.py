@@ -5,9 +5,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL = os.getenv("CHANNEL", "@Asupan_Wajib")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1003512802994"))
-BOT_USERNAME = os.getenv("BOT_USERNAME", "Asupan_Wajib_Bot")
+CHANNEL = os.getenv("CHANNEL", "@Vid_Tube")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1004427442070"))
+BOT_USERNAME = os.getenv("BOT_USERNAME", "Vid_Tub_BOT")
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "8441460682").split(",")]
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 8000))
