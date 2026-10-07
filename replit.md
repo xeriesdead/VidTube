@@ -53,3 +53,4 @@ they are easier to download again through Telegram's bot file-size limit.
 ## User Preferences
 
 - This project runs on Railway + GitHub. Replit is used as a code editor only — do not set up a run workflow or attempt to run the bot here.
+- Untuk setiap perubahan pada proyek ini, bantu commit dan push ke GitHub. Jika akses push belum tersedia, jelaskan hambatannya; jangan menyatakan sudah push sebelum berhasil.
