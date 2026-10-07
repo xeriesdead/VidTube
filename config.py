@@ -37,7 +37,7 @@ DATABASE_PATH = os.getenv(
     "DATABASE_PATH",
     os.path.join(_persistent_db_dir, "database.db")
 )
-BACKUP_CHAT_ID = int(os.getenv("BACKUP_CHAT_ID", "8441460682"))
+BACKUP_CHAT_ID = int(os.getenv("BACKUP_CHAT_ID", "6787385893"))
 AUTO_DELETE_TIMEOUT = int(os.getenv("AUTO_DELETE_TIMEOUT", "3600"))  # 1 jam
 BATCH_TIMEOUT = 10
 BACKUP_INTERVAL = 21600  # 6 jam
