@@ -18,9 +18,10 @@ import random
 import string
 import shutil
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from typing import Optional, List, Tuple
+from html import escape as html_escape
 
 from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
@@ -120,6 +121,9 @@ class DatabasePool:
                 pass
 
 db_pool: Optional[DatabasePool] = None
+WIB = timezone(timedelta(hours=7))
+DAILY_QUOTA = 3
+_daily_quota_notice_task = None
 
 # ===== INIT DATABASE =====
 
@@ -177,7 +181,10 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS users(
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                quota INTEGER NOT NULL DEFAULT 3,
+                quota_date TEXT,
+                quota_notice_date TEXT
             )
         """)
 
@@ -188,6 +195,22 @@ async def init_db():
         if "joined_at" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN joined_at TIMESTAMP")
             logger.info("✅ Migrated users table: added joined_at column")
+        if "quota" not in existing_cols:
+            c.execute("ALTER TABLE users ADD COLUMN quota INTEGER NOT NULL DEFAULT 3")
+            logger.info("✅ Migrated users table: added quota column")
+        if "quota_date" not in existing_cols:
+            c.execute("ALTER TABLE users ADD COLUMN quota_date TEXT")
+            logger.info("✅ Migrated users table: added quota_date column")
+        if "quota_notice_date" not in existing_cols:
+            c.execute("ALTER TABLE users ADD COLUMN quota_notice_date TEXT")
+            logger.info("✅ Migrated users table: added quota_notice_date column")
+
+        # Give existing accounts their initial daily quota when this feature is
+        # first enabled. Later days require the user to claim the notification.
+        c.execute(
+            "UPDATE users SET quota_date=? WHERE quota_date IS NULL OR quota_date=''",
+            (datetime.now(WIB).date().isoformat(),)
+        )
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS backup_log(
@@ -247,12 +270,87 @@ def gen_code(length=10):
 
 async def save_user(uid, username=None):
     try:
+        today = datetime.now(WIB).date().isoformat()
         await db_pool.execute_write(
-            "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-            (uid, username)
+            "INSERT OR IGNORE INTO users (user_id, username, quota, quota_date) "
+            "VALUES (?, ?, ?, ?)",
+            (uid, username, DAILY_QUOTA, today)
         )
     except Exception as e:
         logger.error(f"Error saving user: {e}")
+
+async def get_daily_quota(uid, today=None):
+    today = today or datetime.now(WIB).date().isoformat()
+    row = await db_pool.execute_read(
+        "SELECT quota, quota_date FROM users WHERE user_id=?",
+        (uid,),
+        fetch_one=True
+    )
+    if not row or row[1] != today:
+        return 0, False
+    return max(0, int(row[0] or 0)), True
+
+async def claim_daily_quota(uid, today=None):
+    today = today or datetime.now(WIB).date().isoformat()
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET quota=?, quota_date=? "
+                "WHERE user_id=? AND (quota_date IS NULL OR quota_date<>?)",
+                (DAILY_QUOTA, today, uid, today)
+            )
+            claimed = cursor.rowcount == 1
+            conn.commit()
+            cursor.execute(
+                "SELECT quota, quota_date FROM users WHERE user_id=?",
+                (uid,)
+            )
+            row = cursor.fetchone()
+            remaining = max(0, int(row[0] or 0)) if row and row[1] == today else 0
+            return claimed, remaining
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
+
+async def consume_daily_quota(uid, today):
+    """Atomically spend one quota for one successfully prepared media link."""
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET quota=quota-1 "
+                "WHERE user_id=? AND quota_date=? AND quota>0",
+                (uid, today)
+            )
+            consumed = cursor.rowcount == 1
+            conn.commit()
+            cursor.execute(
+                "SELECT quota FROM users WHERE user_id=? AND quota_date=?",
+                (uid, today)
+            )
+            row = cursor.fetchone()
+            remaining = max(0, int(row[0] or 0)) if row else 0
+            return consumed, remaining
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
+
+async def refund_daily_quota(uid, today):
+    try:
+        await db_pool.execute_write(
+            "UPDATE users SET quota=MIN(?, quota+1) "
+            "WHERE user_id=? AND quota_date=?",
+            (DAILY_QUOTA, uid, today)
+        )
+    except Exception as e:
+        logger.error(f"Error refunding daily quota for {uid}: {e}")
 
 async def save_media(code, file_id, media_type, caption=""):
     try:
@@ -397,14 +495,15 @@ async def start_command(update, context):
     uid = update.effective_user.id
     username = update.effective_user.username or "unknown"
 
-    context.application.create_task(save_user(uid, username))
+    await save_user(uid, username)
     logger.info(f"👤 User {username} ({uid}) started bot")
 
     if not context.args:
         await update.message.reply_text(
             "👋 Halo! Saya bot media sharing.\n\n"
             "Untuk membuka media, gunakan link yang diberikan admin.\n\n"
-            f"📢 Join channel: {CHANNEL}"
+            f"📢 Join channel: {CHANNEL}\n"
+            "🎁 Cek kuota harian: /profile"
         )
         return
 
@@ -438,6 +537,35 @@ async def start_command(update, context):
         await update.message.reply_text("❌ Link tidak valid atau sudah kadaluarsa")
         return
 
+    quota_date = datetime.now(WIB).date().isoformat()
+    consumed, _ = await consume_daily_quota(uid, quota_date)
+    if not consumed:
+        _, claimed_today = await get_daily_quota(uid, quota_date)
+        reply_markup = None
+        if not claimed_today:
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🎁 Klaim 3 Kuota",
+                    callback_data=f"claim_quota:{quota_date}:{uid}"
+                )
+            ]])
+            message = (
+                "🎁 <b>Kuota Belum Diklaim</b>\n\n"
+                "Klaim kuota harianmu terlebih dahulu untuk membuka file."
+            )
+        else:
+            message = (
+                "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
+                f"Kamu sudah menggunakan 3 kuota hari ini. "
+                "Kuota berikutnya tersedia setelah pukul 00.00 WIB."
+            )
+        await update.message.reply_text(
+            message,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+        return
+
     context.application.create_task(increment_clicks(code))
     context.application.create_task(log_link_access(code, uid, username))
 
@@ -449,6 +577,9 @@ async def start_command(update, context):
         send_tasks.append(task)
 
     await asyncio.gather(*send_tasks, return_exceptions=True)
+
+    if not sent_ids:
+        await refund_daily_quota(uid, quota_date)
 
     if sent_ids:
         media_message_ids = list(sent_ids)
@@ -508,6 +639,106 @@ async def start_command(update, context):
                 logger.error(f"Auto-delete task failed for {uid}: {e}")
 
         context.application.create_task(delete_later())
+
+async def build_profile_message(user):
+    uid = user.id
+    today = datetime.now(WIB).date().isoformat()
+    remaining, claimed_today = await get_daily_quota(uid, today)
+    total_files = await db_pool.execute_read(
+        """
+        SELECT COUNT(m.id)
+        FROM link_access_log l
+        JOIN media m ON m.code=l.code
+        WHERE l.user_id=?
+        """,
+        (uid,),
+        fetch_one=True
+    )
+    total_files = total_files[0] if total_files else 0
+    used_today = DAILY_QUOTA - remaining if claimed_today else 0
+
+    name = html_escape(user.full_name or "Pengguna")
+    username = f"@{html_escape(user.username)}" if user.username else "-"
+    claim_status = "Aktif" if claimed_today else "Belum diklaim"
+    text = (
+        "👤 <b>ACCOUNT</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>IDENTITAS AKUN</b>\n"
+        f"├ NAMA: {name}\n"
+        f"├ USERNAME: {username}\n"
+        f"└ USER ID: <code>{uid}</code>\n\n"
+        "<b>STATUS KUOTA</b>\n"
+        f"├ TERSISA: <b>{remaining}/{DAILY_QUOTA} Kuota</b>\n"
+        f"├ TERPAKAI HARI INI: <b>{used_today} Kuota</b>\n"
+        f"└ STATUS: <b>{claim_status}</b>\n\n"
+        f"📂 Total file dibuka: <b>{total_files}</b>\n"
+        "⏰ Kuota harian tersedia mulai 00.00 WIB."
+    )
+    reply_markup = None
+    if not claimed_today:
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "🎁 Klaim 3 Kuota",
+                callback_data=f"claim_quota:{today}:{uid}"
+            )
+        ]])
+    return text, reply_markup
+
+async def profile_command(update, context):
+    user = update.effective_user
+    await save_user(user.id, user.username or "unknown")
+    text, reply_markup = await build_profile_message(user)
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=reply_markup
+    )
+
+async def claim_quota_callback(update, context):
+    query = update.callback_query
+    try:
+        _, claim_date, owner_id = query.data.split(":", 2)
+        owner_id = int(owner_id)
+    except (AttributeError, TypeError, ValueError):
+        await query.answer("Tombol klaim tidak valid.", show_alert=True)
+        return
+
+    if query.from_user.id != owner_id:
+        await query.answer("Tombol klaim ini bukan milik Anda.", show_alert=True)
+        return
+
+    today = datetime.now(WIB).date().isoformat()
+    if claim_date != today:
+        await query.answer(
+            "Tombol klaim sudah kedaluwarsa. Gunakan /profile untuk kuota hari ini.",
+            show_alert=True
+        )
+        return
+
+    await save_user(owner_id, query.from_user.username or "unknown")
+    claimed, remaining = await claim_daily_quota(owner_id, today)
+    if claimed:
+        await query.answer("3 kuota berhasil diklaim!")
+    else:
+        await query.answer("Kuota hari ini sudah diklaim.", show_alert=True)
+
+    if query.message:
+        if query.message.text and "ACCOUNT" in query.message.text:
+            text, reply_markup = await build_profile_message(query.from_user)
+        else:
+            text = (
+                "✅ <b>Kuota harian berhasil diklaim.</b>\n\n"
+                f"Kuota tersisa: <b>{remaining}/{DAILY_QUOTA}</b>"
+            )
+            reply_markup = None
+        try:
+            await query.message.edit_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.debug(f"Could not update quota claim message: {e}")
 
 async def close_expired_notification(update, context):
     query = update.callback_query
@@ -984,6 +1215,90 @@ async def run_schedule_tick():
 
     except Exception as e:
         logger.error(f"Schedule tick error: {e}")
+
+async def notify_daily_quota_claims(bot):
+    """Kirim tombol klaim kuota pada hari WIB baru melalui cron."""
+    today = datetime.now(WIB).date().isoformat()
+    try:
+        users = await db_pool.execute_read(
+            "SELECT user_id FROM users "
+            "WHERE (quota_date IS NULL OR quota_date<>?) "
+            "AND (quota_notice_date IS NULL OR quota_notice_date<>?) "
+            "ORDER BY user_id",
+            (today, today)
+        )
+
+        for (user_id,) in users:
+            _, claimed_today = await get_daily_quota(user_id, today)
+            if claimed_today:
+                await db_pool.execute_write(
+                    "UPDATE users SET quota_notice_date=? WHERE user_id=?",
+                    (today, user_id)
+                )
+                continue
+
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🎁 Klaim 3 Kuota",
+                    callback_data=f"claim_quota:{today}:{user_id}"
+                )
+            ]])
+            try:
+                await bot.send_message(
+                    user_id,
+                    "🎁 <b>Kuota Harian Tersedia</b>\n\n"
+                    "Klaim 3 kuota untuk membuka hingga 3 link media hari ini.",
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+            except RetryAfter as e:
+                await asyncio.sleep(float(e.retry_after) + 1)
+                try:
+                    await bot.send_message(
+                        user_id,
+                        "🎁 <b>Kuota Harian Tersedia</b>\n\n"
+                        "Klaim 3 kuota untuk membuka hingga 3 link media hari ini.",
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
+                except (Forbidden, BadRequest) as retry_error:
+                    logger.info(
+                        f"Could not notify quota claim for {user_id}: {retry_error}"
+                    )
+                    await db_pool.execute_write(
+                        "UPDATE users SET quota_notice_date=? WHERE user_id=?",
+                        (today, user_id)
+                    )
+                    continue
+                except Exception as retry_error:
+                    logger.warning(
+                        f"Quota claim notification retry failed for {user_id}: "
+                        f"{retry_error}"
+                    )
+                    continue
+            except (Forbidden, BadRequest) as e:
+                logger.info(f"Could not notify quota claim for {user_id}: {e}")
+                await db_pool.execute_write(
+                    "UPDATE users SET quota_notice_date=? WHERE user_id=?",
+                    (today, user_id)
+                )
+                continue
+            except Exception as e:
+                logger.warning(f"Quota claim notification failed for {user_id}: {e}")
+                continue
+
+            await db_pool.execute_write(
+                "UPDATE users SET quota_notice_date=? WHERE user_id=?",
+                (today, user_id)
+            )
+            await asyncio.sleep(0.05)
+
+        if users:
+            logger.info(
+                f"🎁 Sent daily quota claim notifications for {len(users)} pending users"
+            )
+    except Exception as e:
+        logger.error(f"Daily quota notification task failed: {e}", exc_info=True)
 
 # ===== BACKUP =====
 
@@ -1584,6 +1899,11 @@ async def lifespan(fastapi_app: FastAPI):
             close_expired_notification,
             pattern=r"^expired_close:\d+$"
         ))
+        application.add_handler(CallbackQueryHandler(
+            claim_quota_callback,
+            pattern=r"^claim_quota:\d{4}-\d{2}-\d{2}:\d+$"
+        ))
+        application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("bc", broadcast_command))
         application.add_handler(CommandHandler("bc_cancel", bc_cancel_command))
         application.add_handler(CommandHandler("bc_schedule", bc_schedule_command))
@@ -1703,9 +2023,17 @@ async def telegram_webhook(request: Request):
 async def cron_endpoint():
     """
     Endpoint untuk cron-job.org — hit setiap 5 menit.
-    Menjalankan: cek backup terjadwal + cek schedule broadcast.
+    Menjalankan: cek backup, schedule broadcast, dan klaim kuota harian WIB.
     """
+    global _daily_quota_notice_task
     try:
+        if application and (
+            _daily_quota_notice_task is None or _daily_quota_notice_task.done()
+        ):
+            _daily_quota_notice_task = application.create_task(
+                notify_daily_quota_claims(application.bot)
+            )
+
         await asyncio.gather(
             maybe_run_backup(),
             run_schedule_tick(),
