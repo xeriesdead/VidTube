@@ -1,6 +1,6 @@
 run = "python3 main.py"
 entrypoint = "main.py"
-modules = ["python-3.12", "nodejs-24"]
+modules = ["python-3.12"]
 
 [env]
 PYTHONUNBUFFERED = "1"
