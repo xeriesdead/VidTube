@@ -27,7 +27,10 @@ from html import escape as html_escape
 
 from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import (
+    Update, InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButton,
+    ReplyKeyboardMarkup, BotCommand
+)
 from telegram.error import RetryAfter, Forbidden, BadRequest
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
@@ -129,6 +132,276 @@ WIB = timezone(timedelta(hours=7))
 DAILY_QUOTA = 3
 _daily_quota_notice_task = None
 
+BOT_TEXT = {
+    "id": {
+        "select_language": "🌐 Pilih bahasa / Select language 👇",
+        "language_saved": "✅ Bahasa diatur ke Bahasa Indonesia.",
+        "profile_button": "👤 Profil",
+        "claim_button": "🎁 Klaim Kuota",
+        "language_button": "🌐 Bahasa",
+        "help_button": "ℹ️ Bantuan",
+        "menu_placeholder": "Pilih menu bot",
+        "welcome": (
+            "👋 Halo! Saya bot media sharing.\n\n"
+            "Untuk membuka media, tekan link yang diberikan admin.\n\n"
+            f"📢 Join channel: {CHANNEL}\n"
+            "🎁 Gunakan tombol Klaim Kuota untuk kuota harian."
+        ),
+        "help": (
+            "ℹ️ <b>Panduan Bot</b>\n\n"
+            "• Buka media melalui link dari admin.\n"
+            "• Gunakan <b>Profil</b> untuk melihat kuota.\n"
+            "• Tekan <b>Klaim Kuota</b> untuk mengambil 3 kuota harian.\n"
+            "• Gunakan <b>Bahasa</b> untuk mengganti bahasa."
+        ),
+        "join_required": "⚠️ Wajib bergabung ke channel {channel} untuk mengakses media.",
+        "join_retry": "🔄 Coba Lagi",
+        "preparing": "⏳ Media sedang disiapkan. Coba lagi sebentar.",
+        "invalid_link": "❌ Link tidak valid atau sudah kedaluwarsa.",
+        "quota_unclaimed": (
+            "🎁 <b>Kuota Belum Diklaim</b>\n\n"
+            "Tekan tombol Klaim Kuota di keyboard untuk membuka file."
+        ),
+        "quota_empty": (
+            "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
+            "Kamu sudah menggunakan 3 kuota hari ini. "
+            "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
+            "Lihat paket premium unlimited melalui /quota."
+        ),
+        "claim_success": "✅ 3 kuota berhasil diklaim. Selamat menggunakan!",
+        "claim_already": "Kuota hari ini sudah diklaim.",
+        "claim_expired": "Tombol klaim sudah kedaluwarsa. Gunakan /quota untuk kuota hari ini.",
+        "claim_invalid": "Tombol klaim tidak valid.",
+        "claim_not_yours": "Tombol klaim ini bukan milik Anda.",
+        "claim_notification_title": "🎁 <b>Kuota Harian Tersedia</b>",
+        "claim_notification_body": "Klaim 3 kuota untuk membuka hingga 3 link media hari ini.",
+        "claim_notification_button": "🎁 Klaim 3 Kuota",
+        "claim_notification_done": (
+            "✅ <b>Kuota harian berhasil diklaim.</b>\n\n"
+            "Kuota tersisa: <b>{remaining}/{total}</b>"
+        ),
+        "claim_notification_already": "Kuota hari ini sudah diklaim.",
+        "profile_title": "👤 <b>ACCOUNT</b>",
+        "profile_identity": "<b>IDENTITAS AKUN</b>",
+        "profile_status": "<b>STATUS KUOTA</b>",
+        "profile_name": "├ NAMA",
+        "profile_username": "├ USERNAME",
+        "profile_user_id": "└ USER ID",
+        "profile_remaining": "├ TERSISA",
+        "profile_used": "├ TERPAKAI HARI INI",
+        "profile_claim_status": "└ STATUS",
+        "profile_claimed": "Aktif",
+        "profile_unclaimed": "Belum diklaim",
+        "profile_total_files": "📂 Total file dibuka",
+        "profile_reset": "⏰ Kuota harian tersedia mulai 00.00 WIB.",
+        "premium_quota_active": (
+            "├ TERSISA: <b>Unlimited</b>\n"
+            "├ TERPAKAI HARI INI: <b>Tidak dibatasi</b>\n"
+            "└ STATUS: <b>Premium aktif</b>\n"
+            "⏳ Premium berlaku sampai: <b>{expires}</b>"
+        ),
+        "premium_plans_title": "<b>PAKET PREMIUM UNLIMITED</b>",
+        "premium_plan_1d": "1 hari — Rp1.000",
+        "premium_plan_7d": "7 hari — Rp5.000",
+        "premium_plan_15d": "15 hari — Rp20.000",
+        "premium_unavailable": "Tautan pembayaran premium belum tersedia.",
+        "premium_button": "💎 {days} Hari — Rp{price}",
+        "premium_invalid_button": "Tombol premium tidak valid.",
+        "premium_not_yours": "Tombol ini bukan milik Anda.",
+        "premium_invalid_plan": "Paket premium tidak valid.",
+        "premium_preparing": "Menyiapkan pembayaran Whop...",
+        "premium_checkout_error": "Tautan pembayaran belum bisa dibuat. Silakan coba lagi nanti.",
+        "premium_pay_button": "💳 Bayar via Whop",
+        "premium_check_button": "🔄 Saya sudah bayar",
+        "premium_checkout_text": (
+            "💎 <b>Paket Premium {days} Hari</b>\n"
+            "Harga: <b>Rp{price}</b>\n\n"
+            "Selesaikan pembayaran di Whop. Setelah kembali ke bot, tekan "
+            "<b>Saya sudah bayar</b> untuk memverifikasi transaksi."
+        ),
+        "premium_check_invalid": "Pemeriksaan pembayaran tidak valid.",
+        "premium_checking": "Memeriksa pembayaran...",
+        "premium_verify_error": "Pembayaran belum dapat diverifikasi. Coba lagi beberapa saat.",
+        "premium_pending": (
+            "Pembayaran belum terkonfirmasi di Whop. Setelah pembayaran selesai, "
+            "tekan tombol pemeriksaan ini lagi."
+        ),
+        "premium_success": (
+            "✅ <b>Pembayaran terverifikasi.</b>\n"
+            "Kuota premium unlimited sudah aktif sampai <b>{expires}</b>."
+        ),
+        "premium_no_pending": (
+            "Tidak ada pembayaran premium yang menunggu verifikasi. Gunakan /quota "
+            "untuk melihat paket yang tersedia."
+        ),
+        "premium_success_plain": (
+            "✅ Pembayaran terverifikasi. Kuota premium unlimited aktif sampai {expires}."
+        ),
+        "premium_pending_plain": (
+            "Pembayaran belum terkonfirmasi di Whop. Jika baru membayar, gunakan "
+            "tombol pemeriksaan pada pesan checkout."
+        ),
+        "media_expiry": "⌛ {count} media akan terhapus otomatis dalam 1 jam.",
+        "expired_title": "📌 <b>File Telah Dihapus Otomatis</b>",
+        "expired_body": (
+            "File sebelumnya sudah dihapus sesuai pengaturan auto delete.\n\n"
+            "Tekan tombol <b>Ambil File Lagi</b> jika ingin membuka ulang file tersebut."
+        ),
+        "take_again": "📥 Ambil File Lagi",
+        "close": "✖ Tutup",
+        "notification_invalid": "Notifikasi tidak valid.",
+        "notification_not_yours": "Notifikasi ini bukan milik Anda.",
+    },
+    "en": {
+        "select_language": "🌐 Pilih bahasa / Select language 👇",
+        "language_saved": "✅ Language set to English.",
+        "profile_button": "👤 Profile",
+        "claim_button": "🎁 Claim Quota",
+        "language_button": "🌐 Language",
+        "help_button": "ℹ️ Help",
+        "menu_placeholder": "Choose a bot menu",
+        "welcome": (
+            "👋 Hello! I am a media sharing bot.\n\n"
+            "Open media using a link shared by the admin.\n\n"
+            f"📢 Join the channel: {CHANNEL}\n"
+            "🎁 Use Claim Quota to claim your daily quota."
+        ),
+        "help": (
+            "ℹ️ <b>Bot Guide</b>\n\n"
+            "• Open media using a link shared by the admin.\n"
+            "• Use <b>Profile</b> to check your quota.\n"
+            "• Press <b>Claim Quota</b> to claim 3 daily quotas.\n"
+            "• Use <b>Language</b> to change the bot language."
+        ),
+        "join_required": "⚠️ Join channel {channel} to access this media.",
+        "join_retry": "🔄 Try Again",
+        "preparing": "⏳ Media is being prepared. Please try again shortly.",
+        "invalid_link": "❌ This link is invalid or has expired.",
+        "quota_unclaimed": (
+            "🎁 <b>Quota Not Claimed</b>\n\n"
+            "Press Claim Quota on the keyboard before opening files."
+        ),
+        "quota_empty": (
+            "⛔ <b>Daily Quota Used</b>\n\n"
+            "You have used all 3 quotas today. Your next quota is available "
+            "after 00:00 WIB.\n\n"
+            "View unlimited premium plans with /quota."
+        ),
+        "claim_success": "✅ You claimed 3 quotas. Enjoy!",
+        "claim_already": "Today's quota has already been claimed.",
+        "claim_expired": "This claim button has expired. Use /quota to check today's quota.",
+        "claim_invalid": "This claim button is invalid.",
+        "claim_not_yours": "This claim button does not belong to you.",
+        "claim_notification_title": "🎁 <b>Daily Quota Available</b>",
+        "claim_notification_body": "Claim 3 quotas to open up to 3 media links today.",
+        "claim_notification_button": "🎁 Claim 3 Quotas",
+        "claim_notification_done": (
+            "✅ <b>Daily quota claimed.</b>\n\n"
+            "Remaining quota: <b>{remaining}/{total}</b>"
+        ),
+        "claim_notification_already": "Today's quota has already been claimed.",
+        "profile_title": "👤 <b>ACCOUNT</b>",
+        "profile_identity": "<b>ACCOUNT DETAILS</b>",
+        "profile_status": "<b>QUOTA STATUS</b>",
+        "profile_name": "├ NAME",
+        "profile_username": "├ USERNAME",
+        "profile_user_id": "└ USER ID",
+        "profile_remaining": "├ REMAINING",
+        "profile_used": "├ USED TODAY",
+        "profile_claim_status": "└ STATUS",
+        "profile_claimed": "Claimed",
+        "profile_unclaimed": "Not claimed",
+        "profile_total_files": "📂 Total files opened",
+        "profile_reset": "⏰ Daily quota is available from 00:00 WIB.",
+        "premium_quota_active": (
+            "├ REMAINING: <b>Unlimited</b>\n"
+            "├ USED TODAY: <b>Unlimited</b>\n"
+            "└ STATUS: <b>Premium active</b>\n"
+            "⏳ Premium expires: <b>{expires}</b>"
+        ),
+        "premium_plans_title": "<b>UNLIMITED PREMIUM PLANS</b>",
+        "premium_plan_1d": "1 day — IDR 1,000",
+        "premium_plan_7d": "7 days — IDR 5,000",
+        "premium_plan_15d": "15 days — IDR 20,000",
+        "premium_unavailable": "Premium payment links are not available yet.",
+        "premium_button": "💎 {days} days — IDR {price}",
+        "premium_invalid_button": "This premium button is invalid.",
+        "premium_not_yours": "This button does not belong to you.",
+        "premium_invalid_plan": "This premium plan is invalid.",
+        "premium_preparing": "Preparing your Whop checkout...",
+        "premium_checkout_error": "Could not create the payment link. Please try again later.",
+        "premium_pay_button": "💳 Pay with Whop",
+        "premium_check_button": "🔄 I have paid",
+        "premium_checkout_text": (
+            "💎 <b>{days}-day Premium Plan</b>\n"
+            "Price: <b>IDR {price}</b>\n\n"
+            "Complete your payment on Whop. When you return to the bot, press "
+            "<b>I have paid</b> to verify the transaction."
+        ),
+        "premium_check_invalid": "This payment check is invalid.",
+        "premium_checking": "Checking your payment...",
+        "premium_verify_error": "Payment could not be verified yet. Please try again shortly.",
+        "premium_pending": (
+            "Whop has not confirmed the payment yet. After completing payment, "
+            "press this check button again."
+        ),
+        "premium_success": (
+            "✅ <b>Payment verified.</b>\n"
+            "Unlimited premium is active until <b>{expires}</b>."
+        ),
+        "premium_no_pending": (
+            "There is no premium payment waiting for verification. Use /quota "
+            "to view the available plans."
+        ),
+        "premium_success_plain": (
+            "✅ Payment verified. Unlimited premium is active until {expires}."
+        ),
+        "premium_pending_plain": (
+            "Whop has not confirmed the payment yet. If you just paid, use "
+            "the check button on the checkout message."
+        ),
+        "media_expiry": "⌛ {count} media item(s) will be deleted automatically in 1 hour.",
+        "expired_title": "📌 <b>Media Automatically Deleted</b>",
+        "expired_body": (
+            "The previous media was deleted according to the auto-delete setting.\n\n"
+            "Press <b>Get File Again</b> to open it again."
+        ),
+        "take_again": "📥 Get File Again",
+        "close": "✖ Close",
+        "notification_invalid": "This notification is invalid.",
+        "notification_not_yours": "This notification does not belong to you.",
+    },
+}
+
+LANGUAGE_BUTTONS = {
+    "🇮🇩 Bahasa Indonesia": "id",
+    "🇬🇧 English": "en",
+}
+
+def tr(language, key, **values):
+    language = language if language in BOT_TEXT else "id"
+    return BOT_TEXT[language][key].format(**values)
+
+def command_keyboard(language):
+    language = language if language in BOT_TEXT else "id"
+    text = BOT_TEXT[language]
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(text["profile_button"]), KeyboardButton(text["claim_button"])],
+            [KeyboardButton(text["language_button"]), KeyboardButton(text["help_button"])],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder=text["menu_placeholder"],
+    )
+
+def language_keyboard():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(label) for label in LANGUAGE_BUTTONS]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
 # ===== INIT DATABASE =====
 
 async def init_db():
@@ -188,7 +461,8 @@ async def init_db():
                 joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 quota INTEGER NOT NULL DEFAULT 3,
                 quota_date TEXT,
-                quota_notice_date TEXT
+                quota_notice_date TEXT,
+                language TEXT
             )
         """)
 
@@ -228,6 +502,9 @@ async def init_db():
         if "quota_notice_date" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN quota_notice_date TEXT")
             logger.info("✅ Migrated users table: added quota_notice_date column")
+        if "language" not in existing_cols:
+            c.execute("ALTER TABLE users ADD COLUMN language TEXT")
+            logger.info("✅ Migrated users table: added language column")
 
         # Give existing accounts their initial daily quota when this feature is
         # first enabled. Later days require the user to claim the notification.
@@ -296,12 +573,36 @@ async def save_user(uid, username=None):
     try:
         today = datetime.now(WIB).date().isoformat()
         await db_pool.execute_write(
-            "INSERT OR IGNORE INTO users (user_id, username, quota, quota_date) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO users "
+            "(user_id, username, quota, quota_date, language) "
+            "VALUES (?, ?, ?, ?, NULL)",
             (uid, username, DAILY_QUOTA, today)
         )
     except Exception as e:
         logger.error(f"Error saving user: {e}")
+
+async def get_user_language(uid):
+    row = await db_pool.execute_read(
+        "SELECT language FROM users WHERE user_id=?",
+        (uid,),
+        fetch_one=True
+    )
+    if row and row[0] in BOT_TEXT:
+        return row[0]
+    return None
+
+async def set_user_language(uid, language):
+    if language not in BOT_TEXT:
+        return False
+    try:
+        await db_pool.execute_write(
+            "UPDATE users SET language=? WHERE user_id=?",
+            (language, uid)
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error setting language for {uid}: {e}")
+        return False
 
 async def get_daily_quota(uid, today=None):
     today = today or datetime.now(WIB).date().isoformat()
@@ -709,11 +1010,117 @@ async def finalize_batch(application, uid, expected_code=None):
 
 # ===== HANDLERS =====
 
+async def show_language_selection(update, context):
+    await update.message.reply_text(
+        tr("id", "select_language"),
+        reply_markup=language_keyboard()
+    )
+
+async def language_command(update, context):
+    user = update.effective_user
+    await save_user(user.id, user.username or "unknown")
+    await show_language_selection(update, context)
+
+async def menu_command(update, context):
+    user = update.effective_user
+    await save_user(user.id, user.username or "unknown")
+    language = await get_user_language(user.id) or "id"
+    await update.message.reply_text(
+        tr(language, "help"),
+        parse_mode="HTML",
+        reply_markup=command_keyboard(language)
+    )
+
+async def claim_quota_command(update, context):
+    user = update.effective_user
+    await save_user(user.id, user.username or "unknown")
+    language = await get_user_language(user.id) or "id"
+    today = datetime.now(WIB).date().isoformat()
+    claimed, _ = await claim_daily_quota(user.id, today)
+    await update.message.reply_text(
+        tr(language, "claim_success" if claimed else "claim_already"),
+        reply_markup=command_keyboard(language)
+    )
+
+async def menu_text_handler(update, context):
+    """Route persistent keyboard buttons and language choices."""
+    user = update.effective_user
+    text = (update.message.text or "").strip()
+    await save_user(user.id, user.username or "unknown")
+
+    if text in LANGUAGE_BUTTONS:
+        language = LANGUAGE_BUTTONS[text]
+        await set_user_language(user.id, language)
+        await update.message.reply_text(
+            f"{tr(language, 'language_saved')}\n\n{tr(language, 'welcome')}",
+            reply_markup=command_keyboard(language)
+        )
+        return
+
+    action = None
+    for language in BOT_TEXT:
+        for candidate, key in (
+            ("profile", "profile_button"),
+            ("claim", "claim_button"),
+            ("language", "language_button"),
+            ("help", "help_button"),
+        ):
+            if text == BOT_TEXT[language][key]:
+                action = candidate
+                break
+        if action:
+            break
+
+    if action == "profile":
+        await profile_command(update, context)
+    elif action == "claim":
+        await claim_quota_command(update, context)
+    elif action == "language":
+        await language_command(update, context)
+    elif action == "help":
+        language = await get_user_language(user.id) or "id"
+        await update.message.reply_text(
+            tr(language, "help"),
+            parse_mode="HTML",
+            reply_markup=command_keyboard(language)
+        )
+
+async def register_bot_commands(bot):
+    command_sets = {
+        "id": [
+            BotCommand("start", "Mulai bot"),
+            BotCommand("profile", "Lihat profil dan kuota"),
+            BotCommand("quota", "Lihat kuota dan paket premium"),
+            BotCommand("claim", "Klaim kuota harian"),
+            BotCommand("language", "Ganti bahasa"),
+            BotCommand("menu", "Tampilkan menu"),
+        ],
+        "en": [
+            BotCommand("start", "Start the bot"),
+            BotCommand("profile", "View profile and quota"),
+            BotCommand("quota", "View quota and premium plans"),
+            BotCommand("claim", "Claim daily quota"),
+            BotCommand("language", "Change language"),
+            BotCommand("menu", "Show the menu"),
+        ],
+    }
+    try:
+        await bot.set_my_commands(command_sets["id"])
+    except Exception as e:
+        logger.warning(f"Could not register default bot commands: {e}")
+
+    for language, commands in command_sets.items():
+        try:
+            await bot.set_my_commands(commands, language_code=language)
+        except Exception as e:
+            logger.warning(f"Could not register {language} bot commands: {e}")
+
 async def start_command(update, context):
     uid = update.effective_user.id
     username = update.effective_user.username or "unknown"
 
     await save_user(uid, username)
+    language = await get_user_language(uid) or "id"
     logger.info(f"👤 User {username} ({uid}) started bot")
 
     if context.args and context.args[0] == "premium_check":
@@ -721,11 +1128,12 @@ async def start_command(update, context):
         return
 
     if not context.args:
+        if not await get_user_language(uid):
+            await show_language_selection(update, context)
+            return
         await update.message.reply_text(
-            "👋 Halo! Saya bot media sharing.\n\n"
-            "Untuk membuka media, gunakan link yang diberikan admin.\n\n"
-            f"📢 Join channel: {CHANNEL}\n"
-            "🎁 Cek kuota harian: /quota"
+            tr(language, "welcome"),
+            reply_markup=command_keyboard(language)
         )
         return
 
@@ -737,10 +1145,13 @@ async def start_command(update, context):
     if not joined:
         btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 JOIN CHANNEL", url=f"https://t.me/{CHANNEL[1:]}")],
-            [InlineKeyboardButton("🔄 Coba Lagi", url=f"https://t.me/{BOT_USERNAME}?start={code}")]
+            [InlineKeyboardButton(
+                tr(language, "join_retry"),
+                url=f"https://t.me/{BOT_USERNAME}?start={code}"
+            )]
         ])
         await update.message.reply_text(
-            f"⚠️ Wajib join channel {CHANNEL} untuk akses media!",
+            tr(language, "join_required", channel=CHANNEL),
             reply_markup=btn
         )
         return
@@ -752,11 +1163,11 @@ async def start_command(update, context):
     )
 
     if not ready_result or ready_result[0] == 0:
-        await update.message.reply_text("⏳ Sedang menyiapkan media, coba lagi sebentar...")
+        await update.message.reply_text(tr(language, "preparing"))
         return
 
     if not media_list:
-        await update.message.reply_text("❌ Link tidak valid atau sudah kadaluarsa")
+        await update.message.reply_text(tr(language, "invalid_link"))
         return
 
     quota_date = datetime.now(WIB).date().isoformat()
@@ -772,21 +1183,13 @@ async def start_command(update, context):
         if not claimed_today:
             reply_markup = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
-                    "🎁 Klaim 3 Kuota",
+                    tr(language, "claim_notification_button"),
                     callback_data=f"claim_quota:{quota_date}:{uid}"
                 )
             ]])
-            message = (
-                "🎁 <b>Kuota Belum Diklaim</b>\n\n"
-                "Klaim kuota harianmu terlebih dahulu untuk membuka file."
-            )
+            message = tr(language, "quota_unclaimed")
         else:
-            message = (
-                "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
-                f"Kamu sudah menggunakan 3 kuota hari ini. "
-                "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
-                "Lihat paket premium unlimited melalui /quota."
-            )
+            message = tr(language, "quota_empty")
         await update.message.reply_text(
             message,
             parse_mode="HTML",
@@ -814,7 +1217,8 @@ async def start_command(update, context):
         expiry_notice_id = None
         try:
             msg = await update.message.reply_text(
-                f"⌛ {len(sent_ids)} media akan terhapus otomatis dalam 1 jam."
+                tr(language, "media_expiry", count=len(sent_ids)),
+                reply_markup=command_keyboard(language)
             )
             expiry_notice_id = msg.message_id
         except Exception as e:
@@ -844,22 +1248,21 @@ async def start_command(update, context):
                         )
 
                 if media_message_ids and deleted_media_count == len(media_message_ids):
+                    notification_language = await get_user_language(uid) or "id"
                     keyboard = InlineKeyboardMarkup([[
                         InlineKeyboardButton(
-                            "📥 Ambil File Lagi",
+                            tr(notification_language, "take_again"),
                             url=f"https://t.me/{BOT_USERNAME}?start={code}"
                         ),
                         InlineKeyboardButton(
-                            "✖ Tutup",
+                            tr(notification_language, "close"),
                             callback_data=f"expired_close:{uid}"
                         )
                     ]])
                     await context.bot.send_message(
                         uid,
-                        "📌 <b>File Telah Dihapus Otomatis</b>\n\n"
-                        "File sebelumnya sudah dihapus sesuai pengaturan auto delete.\n\n"
-                        "Tekan tombol <b>Ambil File Lagi</b> jika ingin membuka "
-                        "ulang file tersebut.",
+                        f"{tr(notification_language, 'expired_title')}\n\n"
+                        f"{tr(notification_language, 'expired_body')}",
                         parse_mode="HTML",
                         reply_markup=keyboard
                     )
@@ -870,6 +1273,7 @@ async def start_command(update, context):
 
 async def build_profile_message(user):
     uid = user.id
+    language = await get_user_language(uid) or "id"
     today = datetime.now(WIB).date().isoformat()
     remaining, claimed_today = await get_daily_quota(uid, today)
     premium_until = await get_active_premium_expiration(uid)
@@ -890,51 +1294,54 @@ async def build_profile_message(user):
     name = html_escape(user.full_name or "Pengguna")
     username = f"@{html_escape(user.username)}" if user.username else "-"
     if premium_active:
-        quota_status = (
-            "├ TERSISA: <b>Unlimited</b>\n"
-            "├ TERPAKAI HARI INI: <b>Tidak dibatasi</b>\n"
-            "└ STATUS: <b>Premium aktif</b>\n"
-            f"⏳ Premium berlaku sampai: <b>{_format_premium_expiration(premium_until)}</b>"
+        quota_status = tr(
+            language,
+            "premium_quota_active",
+            expires=_format_premium_expiration(premium_until)
         )
     else:
-        claim_status = "Aktif" if claimed_today else "Belum diklaim"
+        claim_status = tr(
+            language,
+            "profile_claimed" if claimed_today else "profile_unclaimed"
+        )
         quota_status = (
-            f"├ TERSISA: <b>{remaining}/{DAILY_QUOTA} Kuota</b>\n"
-            f"├ TERPAKAI HARI INI: <b>{used_today} Kuota</b>\n"
-            f"└ STATUS: <b>{claim_status}</b>\n"
-            "⏰ Kuota harian tersedia mulai 00.00 WIB."
+            f"{tr(language, 'profile_remaining')}: <b>{remaining}/{DAILY_QUOTA}</b>\n"
+            f"{tr(language, 'profile_used')}: <b>{used_today}</b>\n"
+            f"{tr(language, 'profile_claim_status')}: <b>{claim_status}</b>\n"
+            f"{tr(language, 'profile_reset')}"
         )
 
     text = (
-        "👤 <b>ACCOUNT</b>\n"
+        f"{tr(language, 'profile_title')}\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "<b>IDENTITAS AKUN</b>\n"
-        f"├ NAMA: {name}\n"
-        f"├ USERNAME: {username}\n"
-        f"└ USER ID: <code>{uid}</code>\n\n"
-        "<b>STATUS KUOTA</b>\n"
+        f"{tr(language, 'profile_identity')}\n"
+        f"{tr(language, 'profile_name')}: {name}\n"
+        f"{tr(language, 'profile_username')}: {username}\n"
+        f"{tr(language, 'profile_user_id')}: <code>{uid}</code>\n\n"
+        f"{tr(language, 'profile_status')}\n"
         f"{quota_status}\n\n"
-        f"📂 Total file dibuka: <b>{total_files}</b>\n\n"
-        "<b>PAKET PREMIUM UNLIMITED</b>\n"
-        "├ 1 hari — Rp1.000\n"
-        "├ 7 hari — Rp5.000\n"
-        "└ 15 hari — Rp20.000"
+        f"{tr(language, 'profile_total_files')}: <b>{total_files}</b>\n\n"
+        f"{tr(language, 'premium_plans_title')}\n"
+        f"├ {tr(language, 'premium_plan_1d')}\n"
+        f"├ {tr(language, 'premium_plan_7d')}\n"
+        f"└ {tr(language, 'premium_plan_15d')}"
     )
 
     keyboard_rows = []
     if not premium_active and not claimed_today:
         keyboard_rows.append([InlineKeyboardButton(
-            "🎁 Klaim 3 Kuota",
+            tr(language, "claim_notification_button"),
             callback_data=f"claim_quota:{today}:{uid}"
         )])
     if WHOP_API_KEY:
         for tier_key, tier in WHOP_PREMIUM_TIERS.items():
+            price = f"{tier['price']:,}".replace(",", ".")
             keyboard_rows.append([InlineKeyboardButton(
-                f"💎 {tier['days']} Hari — Rp{tier['price']:,}".replace(",", "."),
+                tr(language, "premium_button", days=tier["days"], price=price),
                 callback_data=f"premium_buy:{tier_key}:{uid}"
             )])
     else:
-        text += "\n\nTautan pembayaran premium belum tersedia."
+        text += f"\n\n{tr(language, 'premium_unavailable')}"
 
     reply_markup = InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
     return text, reply_markup
@@ -954,21 +1361,22 @@ async def profile_command(update, context):
 
 async def premium_buy_callback(update, context):
     query = update.callback_query
+    language = await get_user_language(query.from_user.id) or "id"
     try:
         _, tier_key, owner_id = query.data.split(":", 2)
         owner_id = int(owner_id)
     except (AttributeError, TypeError, ValueError):
-        await query.answer("Tombol premium tidak valid.", show_alert=True)
+        await query.answer(tr(language, "premium_invalid_button"), show_alert=True)
         return
 
     if query.from_user.id != owner_id:
-        await query.answer("Tombol ini bukan milik Anda.", show_alert=True)
+        await query.answer(tr(language, "premium_not_yours"), show_alert=True)
         return
     if tier_key not in WHOP_PREMIUM_TIERS:
-        await query.answer("Paket premium tidak valid.", show_alert=True)
+        await query.answer(tr(language, "premium_invalid_plan"), show_alert=True)
         return
 
-    await query.answer("Menyiapkan pembayaran Whop...")
+    await query.answer(tr(language, "premium_preparing"))
     await save_user(owner_id, query.from_user.username or "unknown")
     try:
         order_id, purchase_url = await create_whop_checkout(owner_id, tier_key)
@@ -976,37 +1384,44 @@ async def premium_buy_callback(update, context):
         logger.warning("Could not create Whop checkout for user %s: %s", owner_id, e)
         if query.message:
             await query.message.reply_text(
-                "Tautan pembayaran belum bisa dibuat. Silakan coba lagi nanti."
+                tr(language, "premium_checkout_error")
             )
         return
 
     tier = WHOP_PREMIUM_TIERS[tier_key]
+    price = f"{tier['price']:,}".replace(",", ".")
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Bayar via Whop", url=purchase_url)],
         [InlineKeyboardButton(
-            "🔄 Saya sudah bayar",
+            tr(language, "premium_pay_button"),
+            url=purchase_url
+        )],
+        [InlineKeyboardButton(
+            tr(language, "premium_check_button"),
             callback_data=f"premium_check:{order_id}"
         )],
     ])
     if query.message:
         await query.message.reply_text(
-            f"💎 <b>Paket Premium {tier['days']} Hari</b>\n"
-            f"Harga: <b>Rp{tier['price']:,}</b>\n\n"
-            "Selesaikan pembayaran di Whop. Setelah kembali ke bot, tekan "
-            "<b>Saya sudah bayar</b> untuk memverifikasi transaksi.",
+            tr(
+                language,
+                "premium_checkout_text",
+                days=tier["days"],
+                price=price,
+            ),
             parse_mode="HTML",
             reply_markup=keyboard,
         )
 
 async def premium_check_callback(update, context):
     query = update.callback_query
+    language = await get_user_language(query.from_user.id) or "id"
     try:
         order_id = int(query.data.split(":", 1)[1])
     except (AttributeError, IndexError, TypeError, ValueError):
-        await query.answer("Pemeriksaan pembayaran tidak valid.", show_alert=True)
+        await query.answer(tr(language, "premium_check_invalid"), show_alert=True)
         return
 
-    await query.answer("Memeriksa pembayaran...")
+    await query.answer(tr(language, "premium_checking"))
     try:
         expires_at = await verify_whop_order_payment(
             order_id, query.from_user.id
@@ -1017,27 +1432,29 @@ async def premium_check_callback(update, context):
         )
         if query.message:
             await query.message.reply_text(
-                "Pembayaran belum dapat diverifikasi. Coba lagi beberapa saat."
+                tr(language, "premium_verify_error")
             )
         return
 
     if not expires_at:
         if query.message:
             await query.message.reply_text(
-                "Pembayaran belum terkonfirmasi di Whop. Setelah pembayaran selesai, "
-                "tekan tombol pemeriksaan ini lagi."
+                tr(language, "premium_pending")
             )
         return
 
     if query.message:
         await query.message.reply_text(
-            "✅ <b>Pembayaran terverifikasi.</b>\n"
-            "Kuota premium unlimited sudah aktif sampai "
-            f"<b>{_format_premium_expiration(expires_at)}</b>.",
+            tr(
+                language,
+                "premium_success",
+                expires=_format_premium_expiration(expires_at)
+            ),
             parse_mode="HTML",
         )
 
 async def check_latest_premium_payment(update, context, uid):
+    language = await get_user_language(uid) or "id"
     order = await db_pool.execute_read(
         "SELECT order_id FROM premium_orders "
         "WHERE user_id=? AND status='pending' "
@@ -1047,8 +1464,7 @@ async def check_latest_premium_payment(update, context, uid):
     )
     if not order:
         await update.message.reply_text(
-            "Tidak ada pembayaran premium yang menunggu verifikasi. Gunakan /quota "
-            "untuk melihat paket yang tersedia."
+            tr(language, "premium_no_pending")
         )
         return
     try:
@@ -1058,37 +1474,40 @@ async def check_latest_premium_payment(update, context, uid):
             "Could not verify latest Whop order for user %s: %s", uid, e
         )
         await update.message.reply_text(
-            "Pembayaran belum dapat diverifikasi. Coba lagi beberapa saat."
+            tr(language, "premium_verify_error")
         )
         return
     if expires_at:
         await update.message.reply_text(
-            "✅ Pembayaran terverifikasi. Kuota premium unlimited aktif sampai "
-            f"{_format_premium_expiration(expires_at)}."
+            tr(
+                language,
+                "premium_success_plain",
+                expires=_format_premium_expiration(expires_at)
+            )
         )
     else:
         await update.message.reply_text(
-            "Pembayaran belum terkonfirmasi di Whop. Jika baru membayar, gunakan "
-            "tombol pemeriksaan pada pesan checkout."
+            tr(language, "premium_pending_plain")
         )
 
 async def claim_quota_callback(update, context):
     query = update.callback_query
+    language = await get_user_language(query.from_user.id) or "id"
     try:
         _, claim_date, owner_id = query.data.split(":", 2)
         owner_id = int(owner_id)
     except (AttributeError, TypeError, ValueError):
-        await query.answer("Tombol klaim tidak valid.", show_alert=True)
+        await query.answer(tr(language, "claim_invalid"), show_alert=True)
         return
 
     if query.from_user.id != owner_id:
-        await query.answer("Tombol klaim ini bukan milik Anda.", show_alert=True)
+        await query.answer(tr(language, "claim_not_yours"), show_alert=True)
         return
 
     today = datetime.now(WIB).date().isoformat()
     if claim_date != today:
         await query.answer(
-            "Tombol klaim sudah kedaluwarsa. Gunakan /quota untuk kuota hari ini.",
+            tr(language, "claim_expired"),
             show_alert=True
         )
         return
@@ -1096,17 +1515,20 @@ async def claim_quota_callback(update, context):
     await save_user(owner_id, query.from_user.username or "unknown")
     claimed, remaining = await claim_daily_quota(owner_id, today)
     if claimed:
-        await query.answer("3 kuota berhasil diklaim!")
+        await query.answer(tr(language, "claim_success"))
     else:
-        await query.answer("Kuota hari ini sudah diklaim.", show_alert=True)
+        await query.answer(tr(language, "claim_notification_already"), show_alert=True)
 
     if query.message:
         if query.message.text and "ACCOUNT" in query.message.text:
             text, reply_markup = await build_profile_message(query.from_user)
         else:
-            text = (
-                "✅ <b>Kuota harian berhasil diklaim.</b>\n\n"
-                f"Kuota tersisa: <b>{remaining}/{DAILY_QUOTA}</b>"
+            language = await get_user_language(owner_id) or "id"
+            text = tr(
+                language,
+                "claim_notification_done",
+                remaining=remaining,
+                total=DAILY_QUOTA,
             )
             reply_markup = None
         try:
@@ -1120,14 +1542,15 @@ async def claim_quota_callback(update, context):
 
 async def close_expired_notification(update, context):
     query = update.callback_query
+    language = await get_user_language(query.from_user.id) or "id"
     try:
         owner_id = int(query.data.split(":", 1)[1])
     except (IndexError, ValueError):
-        await query.answer("Notifikasi tidak valid.", show_alert=True)
+        await query.answer(tr(language, "notification_invalid"), show_alert=True)
         return
 
     if query.from_user.id != owner_id:
-        await query.answer("Notifikasi ini bukan milik Anda.", show_alert=True)
+        await query.answer(tr(language, "notification_not_yours"), show_alert=True)
         return
 
     await query.answer()
@@ -1615,17 +2038,21 @@ async def notify_daily_quota_claims(bot):
                 )
                 continue
 
+            language = await get_user_language(user_id) or "id"
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
-                    "🎁 Klaim 3 Kuota",
+                    tr(language, "claim_notification_button"),
                     callback_data=f"claim_quota:{today}:{user_id}"
                 )
             ]])
+            notification = (
+                f"{tr(language, 'claim_notification_title')}\n\n"
+                f"{tr(language, 'claim_notification_body')}"
+            )
             try:
                 await bot.send_message(
                     user_id,
-                    "🎁 <b>Kuota Harian Tersedia</b>\n\n"
-                    "Klaim 3 kuota untuk membuka hingga 3 link media hari ini.",
+                    notification,
                     parse_mode="HTML",
                     reply_markup=keyboard
                 )
@@ -1634,8 +2061,7 @@ async def notify_daily_quota_claims(bot):
                 try:
                     await bot.send_message(
                         user_id,
-                        "🎁 <b>Kuota Harian Tersedia</b>\n\n"
-                        "Klaim 3 kuota untuk membuka hingga 3 link media hari ini.",
+                        notification,
                         parse_mode="HTML",
                         reply_markup=keyboard
                     )
@@ -2281,8 +2707,19 @@ async def lifespan(fastapi_app: FastAPI):
             claim_quota_callback,
             pattern=r"^claim_quota:\d{4}-\d{2}-\d{2}:\d+$"
         ))
+        application.add_handler(CallbackQueryHandler(
+            premium_buy_callback,
+            pattern=r"^premium_buy:(1d|7d|15d):\d+$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            premium_check_callback,
+            pattern=r"^premium_check:\d+$"
+        ))
         application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("quota", profile_command))
+        application.add_handler(CommandHandler("claim", claim_quota_command))
+        application.add_handler(CommandHandler("language", language_command))
+        application.add_handler(CommandHandler("menu", menu_command))
         application.add_handler(CommandHandler("bc", broadcast_command))
         application.add_handler(CommandHandler("bc_cancel", bc_cancel_command))
         application.add_handler(CommandHandler("bc_schedule", bc_schedule_command))
@@ -2295,6 +2732,10 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("backup_now", backup_now_command))
         application.add_handler(CommandHandler("import_db", import_db_command))
         application.add_handler(CommandHandler("id", id_command))
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            menu_text_handler
+        ))
         # Process database files sent directly, including forwarded backups
         # with a /import_db caption.
         application.add_handler(MessageHandler(filters.Document.ALL, import_db_command))
@@ -2303,6 +2744,9 @@ async def lifespan(fastapi_app: FastAPI):
 
         await application.initialize()
         await application.start()
+        bot_commands_task = asyncio.create_task(
+            register_bot_commands(application.bot)
+        )
 
         cleanup_task_obj = asyncio.create_task(cache_cleanup_task())
 
@@ -2341,7 +2785,11 @@ async def lifespan(fastapi_app: FastAPI):
                 logger.error(f"❌ setup_webhook_background error: {e}")
 
         webhook_setup_task = asyncio.create_task(setup_webhook_background())
-        background_tasks = [cleanup_task_obj, webhook_setup_task]
+        background_tasks = [
+            cleanup_task_obj,
+            bot_commands_task,
+            webhook_setup_task,
+        ]
 
         logger.info("=" * 70)
         logger.info("🟢 BOT IS RUNNING (WEBHOOK MODE) — server siap terima request")
