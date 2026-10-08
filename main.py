@@ -127,7 +127,7 @@ class DatabasePool:
 db_pool: Optional[DatabasePool] = None
 WIB = timezone(timedelta(hours=7))
 DAILY_QUOTA = 3
-MAX_SHARE_BONUSES_PER_DAY = 5
+MAX_SHARE_BONUSES_PER_DAY = 10
 _daily_quota_notice_task = None
 
 BOT_TEXT = {
@@ -164,26 +164,23 @@ BOT_TEXT = {
             "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
             "Kamu sudah menggunakan semua {total} kuota hari ini. "
             "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
-            "Buka postingan terbaru {channel} dan teruskan ke bot untuk mendapat "
-            "+1 kuota. Maksimal {max_bonus} bonus per hari, satu kali per postingan."
+            "Buka channel {channel} dan teruskan postingan mana saja ke bot untuk "
+            "mendapat +1 kuota. Maksimal {max_bonus} bonus per akun per hari; "
+            "setiap postingan bisa memberi bonus sekali sehari."
         ),
-        "share_post_button": "📢 Buka Postingan Terbaru",
-        "share_post_not_ready": (
-            "Tautan postingan terbaru belum tersedia. Admin perlu menyinkronkan "
-            "post terbaru channel terlebih dahulu."
-        ),
+        "share_post_button": "📢 Buka Channel VidTube",
         "share_bonus_success": (
             "✅ Bonus +1 kuota berhasil ditambahkan.\n"
             "Kuota tersisa: <b>{remaining}/{total}</b>\n"
             "Bonus hari ini: <b>{bonus_count}/{max_bonus}</b>"
         ),
-        "share_bonus_duplicate": "Postingan ini sudah pernah memberi bonus untuk akun Anda.",
+        "share_bonus_duplicate": "Postingan ini sudah memberi bonus untuk akun Anda hari ini.",
         "share_bonus_daily_limit": "Batas {max_bonus} bonus kuota hari ini sudah tercapai.",
         "share_bonus_error": "Bonus kuota belum bisa ditambahkan. Coba lagi nanti.",
         "share_post_wrong_channel": "Teruskan postingan dari channel resmi {channel}.",
-        "share_post_old": (
-            "Postingan ini bukan postingan terbaru {channel}. "
-            "Buka postingan terbaru melalui tombol di bawah."
+        "share_post_invalid_forward": (
+            "Postingan ini tidak bisa diverifikasi. Gunakan fitur Teruskan "
+            "langsung dari postingan di channel resmi."
         ),
         "share_post_seed_usage": (
             "Balas pesan forward terbaru dari {channel} dengan perintah "
@@ -260,26 +257,23 @@ BOT_TEXT = {
             "⛔ <b>Daily Quota Used</b>\n\n"
             "You have used all {total} quotas today. Your next quota is available "
             "after 00:00 WIB.\n\n"
-            "Open the latest {channel} post and forward it to the bot for +1 quota. "
-            "Up to {max_bonus} bonuses per day, once per post."
+            "Open the {channel} channel and forward any post to the bot for +1 quota. "
+            "Up to {max_bonus} bonuses per account per day; each post can award a "
+            "bonus once a day."
         ),
-        "share_post_button": "📢 Open Latest Post",
-        "share_post_not_ready": (
-            "The latest post link is not available yet. An admin needs to sync "
-            "the channel's current post first."
-        ),
+        "share_post_button": "📢 Open VidTube Channel",
         "share_bonus_success": (
             "✅ +1 quota added.\n"
             "Remaining quota: <b>{remaining}/{total}</b>\n"
             "Today's bonuses: <b>{bonus_count}/{max_bonus}</b>"
         ),
-        "share_bonus_duplicate": "This post has already awarded a bonus to your account.",
+        "share_bonus_duplicate": "This post has already awarded a bonus to your account today.",
         "share_bonus_daily_limit": "You have reached today's limit of {max_bonus} quota bonuses.",
         "share_bonus_error": "The quota bonus could not be added. Please try again later.",
         "share_post_wrong_channel": "Forward a post from the official {channel} channel.",
-        "share_post_old": (
-            "This is not the latest {channel} post. "
-            "Open the latest post using the button below."
+        "share_post_invalid_forward": (
+            "This post cannot be verified. Use Telegram's Forward action directly "
+            "on a post in the official channel."
         ),
         "share_post_seed_usage": (
             "Reply to the latest forwarded {channel} post with /set_share_post "
@@ -432,9 +426,42 @@ async def init_db():
                 post_id INTEGER NOT NULL,
                 reward_date TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(user_id, post_id)
+                PRIMARY KEY(user_id, post_id, reward_date)
             )
         """)
+        reward_columns = c.execute(
+            "PRAGMA table_info(share_quota_rewards)"
+        ).fetchall()
+        reward_primary_key = [
+            column_name
+            for _, column_name in sorted(
+                (row[5], row[1]) for row in reward_columns if row[5]
+            )
+        ]
+        if reward_primary_key != ["user_id", "post_id", "reward_date"]:
+            # Preserve old claims but let the same post reward the user again
+            # on a different day.
+            c.execute("DROP TABLE IF EXISTS share_quota_rewards_migration")
+            c.execute("""
+                CREATE TABLE share_quota_rewards_migration(
+                    user_id INTEGER NOT NULL,
+                    post_id INTEGER NOT NULL,
+                    reward_date TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(user_id, post_id, reward_date)
+                )
+            """)
+            c.execute("""
+                INSERT OR IGNORE INTO share_quota_rewards_migration
+                    (user_id, post_id, reward_date, created_at)
+                SELECT user_id, post_id, reward_date, created_at
+                FROM share_quota_rewards
+            """)
+            c.execute("DROP TABLE share_quota_rewards")
+            c.execute(
+                "ALTER TABLE share_quota_rewards_migration "
+                "RENAME TO share_quota_rewards"
+            )
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_share_rewards_user_date "
             "ON share_quota_rewards(user_id, reward_date)"
@@ -651,12 +678,15 @@ async def save_latest_share_post(post_id):
         (CHANNEL_ID, int(post_id)),
     )
 
-def share_post_url(post_id):
+def share_post_url(post_id=None):
     channel_handle = CHANNEL.strip().rstrip("/")
-    if channel_handle.startswith("https://t.me/"):
-        channel_handle = channel_handle.removeprefix("https://t.me/").split("/", 1)[0]
-    channel_handle = channel_handle.lstrip("@")
-    return f"https://t.me/{channel_handle}/{int(post_id)}"
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if channel_handle.startswith(prefix):
+            channel_handle = channel_handle.removeprefix(prefix).split("/", 1)[0]
+            break
+    channel_handle = channel_handle.lstrip("@/")
+    channel_url = f"https://t.me/{channel_handle}"
+    return f"{channel_url}/{int(post_id)}" if post_id is not None else channel_url
 
 def share_post_keyboard(post_id, language):
     return InlineKeyboardMarkup([[
@@ -687,7 +717,7 @@ def get_forwarded_channel_post(message):
     return None
 
 async def grant_share_quota(uid, post_id, today=None):
-    """Grant one bonus per user/post, capped at five rewards per WIB day."""
+    """Grant one bonus per user/post/day, capped at ten rewards per WIB day."""
     today = today or datetime.now(WIB).date().isoformat()
     async with db_pool.write_lock:
         conn = await db_pool.get()
@@ -704,8 +734,9 @@ async def grant_share_quota(uid, post_id, today=None):
             current_quota = max(0, int(user_row[0] or 0))
             quota_date = user_row[1]
             cursor.execute(
-                "SELECT 1 FROM share_quota_rewards WHERE user_id=? AND post_id=?",
-                (uid, post_id),
+                "SELECT 1 FROM share_quota_rewards "
+                "WHERE user_id=? AND post_id=? AND reward_date=?",
+                (uid, post_id, today),
             )
             if cursor.fetchone():
                 return "duplicate", current_quota if quota_date == today else 0, DAILY_QUOTA
@@ -1066,11 +1097,7 @@ async def start_command(update, context):
                 max_bonus=MAX_SHARE_BONUSES_PER_DAY,
                 channel=CHANNEL,
             )
-            latest_post_id = await get_latest_share_post_id()
-            if latest_post_id is not None:
-                reply_markup = share_post_keyboard(latest_post_id, language)
-            else:
-                message += f"\n\n{tr(language, 'share_post_not_ready')}"
+            reply_markup = share_post_keyboard(None, language)
         await update.message.reply_text(
             message,
             parse_mode="HTML",
@@ -1203,16 +1230,9 @@ async def handle_share_forward(update, context):
         )
         raise ApplicationHandlerStop
 
-    latest_post_id = await get_latest_share_post_id()
-    if latest_post_id is None:
-        if not is_admin(user.id):
-            await message.reply_text(tr(language, "share_post_not_ready"))
-        raise ApplicationHandlerStop
-
-    if not post_id or int(post_id) != latest_post_id:
+    if not post_id:
         await message.reply_text(
-            tr(language, "share_post_old", channel=CHANNEL),
-            reply_markup=share_post_keyboard(latest_post_id, language),
+            tr(language, "share_post_invalid_forward")
         )
         raise ApplicationHandlerStop
 
