@@ -15,11 +15,9 @@ import asyncio
 import gzip
 import sqlite3
 import random
-import secrets
 import string
 import shutil
 import zipfile
-import httpx
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from typing import Optional, List, Tuple
@@ -42,8 +40,6 @@ from config import (
     BACKUP_CHAT_ID, AUTO_DELETE_TIMEOUT, BATCH_TIMEOUT,
     BACKUP_INTERVAL, BACKUP_DIR, MAX_BACKUPS,
     WEBHOOK_URL, WEBHOOK_PATH,
-    WHOP_API_KEY, WHOP_COMPANY_ID, WHOP_API_VERSION_DATE,
-    WHOP_PREMIUM_TIERS
 )
 
 # ===== LOGGING =====
@@ -165,8 +161,7 @@ BOT_TEXT = {
         "quota_empty": (
             "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
             "Kamu sudah menggunakan 3 kuota hari ini. "
-            "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
-            "Lihat paket premium unlimited melalui /quota."
+            "Kuota berikutnya tersedia setelah pukul 00.00 WIB."
         ),
         "claim_success": "✅ 3 kuota berhasil diklaim. Selamat menggunakan!",
         "claim_already": "Kuota hari ini sudah diklaim.",
@@ -194,53 +189,6 @@ BOT_TEXT = {
         "profile_unclaimed": "Belum diklaim",
         "profile_total_files": "📂 Total file dibuka",
         "profile_reset": "⏰ Kuota harian tersedia mulai 00.00 WIB.",
-        "premium_quota_active": (
-            "├ TERSISA: <b>Unlimited</b>\n"
-            "├ TERPAKAI HARI INI: <b>Tidak dibatasi</b>\n"
-            "└ STATUS: <b>Premium aktif</b>\n"
-            "⏳ Premium berlaku sampai: <b>{expires}</b>"
-        ),
-        "premium_plans_title": "<b>PAKET PREMIUM UNLIMITED</b>",
-        "premium_plan_1d": "1 hari — Rp1.000",
-        "premium_plan_7d": "7 hari — Rp5.000",
-        "premium_plan_15d": "15 hari — Rp20.000",
-        "premium_unavailable": "Tautan pembayaran premium belum tersedia.",
-        "premium_button": "💎 {days} Hari — Rp{price}",
-        "premium_invalid_button": "Tombol premium tidak valid.",
-        "premium_not_yours": "Tombol ini bukan milik Anda.",
-        "premium_invalid_plan": "Paket premium tidak valid.",
-        "premium_preparing": "Menyiapkan pembayaran Whop...",
-        "premium_checkout_error": "Tautan pembayaran belum bisa dibuat. Silakan coba lagi nanti.",
-        "premium_pay_button": "💳 Bayar via Whop",
-        "premium_check_button": "🔄 Saya sudah bayar",
-        "premium_checkout_text": (
-            "💎 <b>Paket Premium {days} Hari</b>\n"
-            "Harga: <b>Rp{price}</b>\n\n"
-            "Selesaikan pembayaran di Whop. Setelah kembali ke bot, tekan "
-            "<b>Saya sudah bayar</b> untuk memverifikasi transaksi."
-        ),
-        "premium_check_invalid": "Pemeriksaan pembayaran tidak valid.",
-        "premium_checking": "Memeriksa pembayaran...",
-        "premium_verify_error": "Pembayaran belum dapat diverifikasi. Coba lagi beberapa saat.",
-        "premium_pending": (
-            "Pembayaran belum terkonfirmasi di Whop. Setelah pembayaran selesai, "
-            "tekan tombol pemeriksaan ini lagi."
-        ),
-        "premium_success": (
-            "✅ <b>Pembayaran terverifikasi.</b>\n"
-            "Kuota premium unlimited sudah aktif sampai <b>{expires}</b>."
-        ),
-        "premium_no_pending": (
-            "Tidak ada pembayaran premium yang menunggu verifikasi. Gunakan /quota "
-            "untuk melihat paket yang tersedia."
-        ),
-        "premium_success_plain": (
-            "✅ Pembayaran terverifikasi. Kuota premium unlimited aktif sampai {expires}."
-        ),
-        "premium_pending_plain": (
-            "Pembayaran belum terkonfirmasi di Whop. Jika baru membayar, gunakan "
-            "tombol pemeriksaan pada pesan checkout."
-        ),
         "media_expiry": "⌛ {count} media akan terhapus otomatis dalam 1 jam.",
         "expired_title": "📌 <b>File Telah Dihapus Otomatis</b>",
         "expired_body": (
@@ -284,8 +232,7 @@ BOT_TEXT = {
         "quota_empty": (
             "⛔ <b>Daily Quota Used</b>\n\n"
             "You have used all 3 quotas today. Your next quota is available "
-            "after 00:00 WIB.\n\n"
-            "View unlimited premium plans with /quota."
+            "after 00:00 WIB."
         ),
         "claim_success": "✅ You claimed 3 quotas. Enjoy!",
         "claim_already": "Today's quota has already been claimed.",
@@ -313,53 +260,6 @@ BOT_TEXT = {
         "profile_unclaimed": "Not claimed",
         "profile_total_files": "📂 Total files opened",
         "profile_reset": "⏰ Daily quota is available from 00:00 WIB.",
-        "premium_quota_active": (
-            "├ REMAINING: <b>Unlimited</b>\n"
-            "├ USED TODAY: <b>Unlimited</b>\n"
-            "└ STATUS: <b>Premium active</b>\n"
-            "⏳ Premium expires: <b>{expires}</b>"
-        ),
-        "premium_plans_title": "<b>UNLIMITED PREMIUM PLANS</b>",
-        "premium_plan_1d": "1 day — IDR 1,000",
-        "premium_plan_7d": "7 days — IDR 5,000",
-        "premium_plan_15d": "15 days — IDR 20,000",
-        "premium_unavailable": "Premium payment links are not available yet.",
-        "premium_button": "💎 {days} days — IDR {price}",
-        "premium_invalid_button": "This premium button is invalid.",
-        "premium_not_yours": "This button does not belong to you.",
-        "premium_invalid_plan": "This premium plan is invalid.",
-        "premium_preparing": "Preparing your Whop checkout...",
-        "premium_checkout_error": "Could not create the payment link. Please try again later.",
-        "premium_pay_button": "💳 Pay with Whop",
-        "premium_check_button": "🔄 I have paid",
-        "premium_checkout_text": (
-            "💎 <b>{days}-day Premium Plan</b>\n"
-            "Price: <b>IDR {price}</b>\n\n"
-            "Complete your payment on Whop. When you return to the bot, press "
-            "<b>I have paid</b> to verify the transaction."
-        ),
-        "premium_check_invalid": "This payment check is invalid.",
-        "premium_checking": "Checking your payment...",
-        "premium_verify_error": "Payment could not be verified yet. Please try again shortly.",
-        "premium_pending": (
-            "Whop has not confirmed the payment yet. After completing payment, "
-            "press this check button again."
-        ),
-        "premium_success": (
-            "✅ <b>Payment verified.</b>\n"
-            "Unlimited premium is active until <b>{expires}</b>."
-        ),
-        "premium_no_pending": (
-            "There is no premium payment waiting for verification. Use /quota "
-            "to view the available plans."
-        ),
-        "premium_success_plain": (
-            "✅ Payment verified. Unlimited premium is active until {expires}."
-        ),
-        "premium_pending_plain": (
-            "Whop has not confirmed the payment yet. If you just paid, use "
-            "the check button on the checkout message."
-        ),
         "media_expiry": "⌛ {count} media item(s) will be deleted automatically in 1 hour.",
         "expired_title": "📌 <b>Media Automatically Deleted</b>",
         "expired_body": (
@@ -465,26 +365,6 @@ async def init_db():
                 language TEXT
             )
         """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS premium_orders(
-                order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                tier_key TEXT NOT NULL,
-                plan_id TEXT NOT NULL,
-                checkout_id TEXT NOT NULL UNIQUE,
-                purchase_url TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                payment_id TEXT UNIQUE,
-                paid_at TEXT,
-                expires_at TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
-        c.execute(
-            "CREATE INDEX IF NOT EXISTS idx_premium_orders_user_status "
-            "ON premium_orders(user_id, status, expires_at)"
-        )
 
         existing_cols = [row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()]
         if "username" not in existing_cols:
@@ -676,200 +556,6 @@ async def refund_daily_quota(uid, today):
         )
     except Exception as e:
         logger.error(f"Error refunding daily quota for {uid}: {e}")
-
-_premium_status_cache = {}
-_PREMIUM_STATUS_CACHE_SECONDS = 30
-
-def _whop_headers():
-    return {
-        "Authorization": f"Bearer {WHOP_API_KEY}",
-        "Accept": "application/json",
-        "Api-Version-Date": WHOP_API_VERSION_DATE,
-    }
-
-async def whop_api_request(method, path, params=None, payload=None):
-    if not WHOP_API_KEY:
-        raise RuntimeError("WHOP_API_KEY is not configured")
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.request(
-            method,
-            f"https://api.whop.com/api/v1{path}",
-            headers=_whop_headers(),
-            params=params,
-            json=payload,
-        )
-    if response.is_error:
-        logger.warning("Whop API request failed with status %s", response.status_code)
-        raise RuntimeError(f"Whop API request failed ({response.status_code})")
-    try:
-        result = response.json()
-    except ValueError as e:
-        raise RuntimeError("Whop API returned invalid JSON") from e
-    if isinstance(result, dict) and result.get("error"):
-        raise RuntimeError("Whop API rejected the request")
-    return result
-
-def _parse_whop_datetime(value):
-    if not value:
-        return datetime.now(timezone.utc)
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    except (TypeError, ValueError):
-        return datetime.now(timezone.utc)
-
-async def get_active_premium_expiration(uid):
-    now = datetime.now(timezone.utc)
-    rows = await db_pool.execute_read(
-        "SELECT order_id, payment_id, expires_at FROM premium_orders "
-        "WHERE user_id=? AND status='paid' AND expires_at>?",
-        (uid, now.isoformat(timespec="seconds")),
-    )
-    for order_id, payment_id, expires_at in rows or []:
-        cache_entry = _premium_status_cache.get(payment_id)
-        payment_valid = None
-        if cache_entry and cache_entry[0] > now.timestamp():
-            payment_valid = cache_entry[1]
-        elif payment_id and WHOP_API_KEY:
-            try:
-                status_result = await whop_api_request(
-                    "GET", f"/payments/{payment_id}/status"
-                )
-                payment_valid = status_result.get("status") == "succeeded"
-                _premium_status_cache[payment_id] = (
-                    now.timestamp() + _PREMIUM_STATUS_CACHE_SECONDS,
-                    payment_valid,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Could not refresh Whop status for premium order %s: %s",
-                    order_id, e
-                )
-
-        # Keep verified access during a temporary Whop API outage.
-        if payment_valid is False:
-            await db_pool.execute_write(
-                "UPDATE premium_orders SET status='revoked' WHERE order_id=?",
-                (order_id,),
-            )
-            _premium_status_cache.pop(payment_id, None)
-            continue
-        return expires_at
-    return None
-
-async def create_whop_checkout(uid, tier_key):
-    tier = WHOP_PREMIUM_TIERS.get(tier_key)
-    if not tier:
-        raise ValueError("Paket premium tidak valid")
-    if not WHOP_API_KEY:
-        raise RuntimeError("Pembayaran premium belum dikonfigurasi")
-
-    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    nonce = secrets.token_urlsafe(16)
-    checkout = await whop_api_request(
-        "POST",
-        "/checkout_configurations",
-        payload={
-            "account_id": WHOP_COMPANY_ID,
-            "plan_id": tier["plan_id"],
-            "redirect_url": f"https://t.me/{BOT_USERNAME}?start=premium_check",
-            "metadata": {
-                "telegram_user_id": str(uid),
-                "tier": tier_key,
-                "purchase_nonce": nonce,
-            },
-        },
-    )
-    checkout_id = checkout.get("id")
-    purchase_url = checkout.get("purchase_url") or checkout.get("url")
-    if not checkout_id or not purchase_url:
-        raise RuntimeError("Whop tidak mengembalikan tautan checkout yang valid")
-
-    order_id = await db_pool.execute_write(
-        """
-        INSERT INTO premium_orders
-            (user_id, tier_key, plan_id, checkout_id, purchase_url, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (uid, tier_key, tier["plan_id"], checkout_id, purchase_url, created_at),
-    )
-    return order_id, purchase_url
-
-async def verify_whop_order_payment(order_id, uid):
-    order = await db_pool.execute_read(
-        """
-        SELECT user_id, tier_key, plan_id, checkout_id, status, payment_id,
-               paid_at, expires_at, created_at
-        FROM premium_orders WHERE order_id=?
-        """,
-        (order_id,),
-        fetch_one=True,
-    )
-    if not order or int(order[0]) != int(uid):
-        return None
-
-    if order[4] == "paid":
-        return order[7]
-    if order[4] != "pending":
-        return None
-
-    tier = WHOP_PREMIUM_TIERS.get(order[1])
-    if not tier:
-        raise RuntimeError("Paket premium order tidak dikenal")
-
-    payments_result = await whop_api_request(
-        "GET",
-        "/payments",
-        params={
-            "mode": "account_sales",
-            "account_id": WHOP_COMPANY_ID,
-            "plan_id": order[2],
-            "created_after": order[8],
-            "order": "created_at",
-            "direction": "desc",
-            "first": 100,
-        },
-    )
-    payments = payments_result.get("data", [])
-    for payment in payments:
-        if payment.get("checkout_configuration_id") != order[3]:
-            continue
-        payment_id = payment.get("id")
-        if not payment_id:
-            continue
-        line_items = payment.get("line_items") or []
-        if payment.get("plan_id") != order[2] and not any(
-            item.get("plan_id") == order[2] for item in line_items
-        ):
-            continue
-
-        status_result = await whop_api_request(
-            "GET", f"/payments/{payment_id}/status"
-        )
-        if status_result.get("status") != "succeeded":
-            continue
-
-        paid_at = payment.get("paid_at") or payment.get("created_at")
-        expires_at = (
-            _parse_whop_datetime(paid_at) + timedelta(days=int(tier["days"]))
-        ).isoformat(timespec="seconds")
-        await db_pool.execute_write(
-            """
-            UPDATE premium_orders
-            SET status='paid', payment_id=?, paid_at=?, expires_at=?
-            WHERE order_id=? AND user_id=? AND status='pending'
-            """,
-            (payment_id, paid_at, expires_at, order_id, uid),
-        )
-        _premium_status_cache[payment_id] = (
-            datetime.now(timezone.utc).timestamp() + _PREMIUM_STATUS_CACHE_SECONDS,
-            True,
-        )
-        return expires_at
-    return None
 
 async def save_media(code, file_id, media_type, caption=""):
     try:
@@ -1090,7 +776,7 @@ async def register_bot_commands(bot):
         "id": [
             BotCommand("start", "Mulai bot"),
             BotCommand("profile", "Lihat profil dan kuota"),
-            BotCommand("quota", "Lihat kuota dan paket premium"),
+            BotCommand("quota", "Lihat kuota harian"),
             BotCommand("claim", "Klaim kuota harian"),
             BotCommand("language", "Ganti bahasa"),
             BotCommand("menu", "Tampilkan menu"),
@@ -1098,7 +784,7 @@ async def register_bot_commands(bot):
         "en": [
             BotCommand("start", "Start the bot"),
             BotCommand("profile", "View profile and quota"),
-            BotCommand("quota", "View quota and premium plans"),
+            BotCommand("quota", "View daily quota"),
             BotCommand("claim", "Claim daily quota"),
             BotCommand("language", "Change language"),
             BotCommand("menu", "Show the menu"),
@@ -1122,10 +808,6 @@ async def start_command(update, context):
     await save_user(uid, username)
     language = await get_user_language(uid) or "id"
     logger.info(f"👤 User {username} ({uid}) started bot")
-
-    if context.args and context.args[0] == "premium_check":
-        await check_latest_premium_payment(update, context, uid)
-        return
 
     if not context.args:
         if not await get_user_language(uid):
@@ -1171,12 +853,7 @@ async def start_command(update, context):
         return
 
     quota_date = datetime.now(WIB).date().isoformat()
-    premium_until = await get_active_premium_expiration(uid)
-    premium_active = premium_until is not None
-    if premium_active:
-        consumed = True
-    else:
-        consumed, _ = await consume_daily_quota(uid, quota_date)
+    consumed, _ = await consume_daily_quota(uid, quota_date)
     if not consumed:
         _, claimed_today = await get_daily_quota(uid, quota_date)
         reply_markup = None
@@ -1209,7 +886,7 @@ async def start_command(update, context):
 
     await asyncio.gather(*send_tasks, return_exceptions=True)
 
-    if not sent_ids and not premium_active:
+    if not sent_ids:
         await refund_daily_quota(uid, quota_date)
 
     if sent_ids:
@@ -1276,7 +953,6 @@ async def build_profile_message(user):
     language = await get_user_language(uid) or "id"
     today = datetime.now(WIB).date().isoformat()
     remaining, claimed_today = await get_daily_quota(uid, today)
-    premium_until = await get_active_premium_expiration(uid)
     total_files = await db_pool.execute_read(
         """
         SELECT COUNT(m.id)
@@ -1289,27 +965,19 @@ async def build_profile_message(user):
     )
     total_files = total_files[0] if total_files else 0
     used_today = DAILY_QUOTA - remaining if claimed_today else 0
-    premium_active = premium_until is not None
 
     name = html_escape(user.full_name or "Pengguna")
     username = f"@{html_escape(user.username)}" if user.username else "-"
-    if premium_active:
-        quota_status = tr(
-            language,
-            "premium_quota_active",
-            expires=_format_premium_expiration(premium_until)
-        )
-    else:
-        claim_status = tr(
-            language,
-            "profile_claimed" if claimed_today else "profile_unclaimed"
-        )
-        quota_status = (
-            f"{tr(language, 'profile_remaining')}: <b>{remaining}/{DAILY_QUOTA}</b>\n"
-            f"{tr(language, 'profile_used')}: <b>{used_today}</b>\n"
-            f"{tr(language, 'profile_claim_status')}: <b>{claim_status}</b>\n"
-            f"{tr(language, 'profile_reset')}"
-        )
+    claim_status = tr(
+        language,
+        "profile_claimed" if claimed_today else "profile_unclaimed"
+    )
+    quota_status = (
+        f"{tr(language, 'profile_remaining')}: <b>{remaining}/{DAILY_QUOTA}</b>\n"
+        f"{tr(language, 'profile_used')}: <b>{used_today}</b>\n"
+        f"{tr(language, 'profile_claim_status')}: <b>{claim_status}</b>\n"
+        f"{tr(language, 'profile_reset')}"
+    )
 
     text = (
         f"{tr(language, 'profile_title')}\n"
@@ -1320,34 +988,18 @@ async def build_profile_message(user):
         f"{tr(language, 'profile_user_id')}: <code>{uid}</code>\n\n"
         f"{tr(language, 'profile_status')}\n"
         f"{quota_status}\n\n"
-        f"{tr(language, 'profile_total_files')}: <b>{total_files}</b>\n\n"
-        f"{tr(language, 'premium_plans_title')}\n"
-        f"├ {tr(language, 'premium_plan_1d')}\n"
-        f"├ {tr(language, 'premium_plan_7d')}\n"
-        f"└ {tr(language, 'premium_plan_15d')}"
+        f"{tr(language, 'profile_total_files')}: <b>{total_files}</b>"
     )
 
     keyboard_rows = []
-    if not premium_active and not claimed_today:
+    if not claimed_today:
         keyboard_rows.append([InlineKeyboardButton(
             tr(language, "claim_notification_button"),
             callback_data=f"claim_quota:{today}:{uid}"
         )])
-    if WHOP_API_KEY:
-        for tier_key, tier in WHOP_PREMIUM_TIERS.items():
-            price = f"{tier['price']:,}".replace(",", ".")
-            keyboard_rows.append([InlineKeyboardButton(
-                tr(language, "premium_button", days=tier["days"], price=price),
-                callback_data=f"premium_buy:{tier_key}:{uid}"
-            )])
-    else:
-        text += f"\n\n{tr(language, 'premium_unavailable')}"
 
     reply_markup = InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
     return text, reply_markup
-
-def _format_premium_expiration(value):
-    return _parse_whop_datetime(value).astimezone(WIB).strftime("%d-%m-%Y %H:%M WIB")
 
 async def profile_command(update, context):
     user = update.effective_user
@@ -1358,137 +1010,6 @@ async def profile_command(update, context):
         parse_mode="HTML",
         reply_markup=reply_markup
     )
-
-async def premium_buy_callback(update, context):
-    query = update.callback_query
-    language = await get_user_language(query.from_user.id) or "id"
-    try:
-        _, tier_key, owner_id = query.data.split(":", 2)
-        owner_id = int(owner_id)
-    except (AttributeError, TypeError, ValueError):
-        await query.answer(tr(language, "premium_invalid_button"), show_alert=True)
-        return
-
-    if query.from_user.id != owner_id:
-        await query.answer(tr(language, "premium_not_yours"), show_alert=True)
-        return
-    if tier_key not in WHOP_PREMIUM_TIERS:
-        await query.answer(tr(language, "premium_invalid_plan"), show_alert=True)
-        return
-
-    await query.answer(tr(language, "premium_preparing"))
-    await save_user(owner_id, query.from_user.username or "unknown")
-    try:
-        order_id, purchase_url = await create_whop_checkout(owner_id, tier_key)
-    except Exception as e:
-        logger.warning("Could not create Whop checkout for user %s: %s", owner_id, e)
-        if query.message:
-            await query.message.reply_text(
-                tr(language, "premium_checkout_error")
-            )
-        return
-
-    tier = WHOP_PREMIUM_TIERS[tier_key]
-    price = f"{tier['price']:,}".replace(",", ".")
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            tr(language, "premium_pay_button"),
-            url=purchase_url
-        )],
-        [InlineKeyboardButton(
-            tr(language, "premium_check_button"),
-            callback_data=f"premium_check:{order_id}"
-        )],
-    ])
-    if query.message:
-        await query.message.reply_text(
-            tr(
-                language,
-                "premium_checkout_text",
-                days=tier["days"],
-                price=price,
-            ),
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-
-async def premium_check_callback(update, context):
-    query = update.callback_query
-    language = await get_user_language(query.from_user.id) or "id"
-    try:
-        order_id = int(query.data.split(":", 1)[1])
-    except (AttributeError, IndexError, TypeError, ValueError):
-        await query.answer(tr(language, "premium_check_invalid"), show_alert=True)
-        return
-
-    await query.answer(tr(language, "premium_checking"))
-    try:
-        expires_at = await verify_whop_order_payment(
-            order_id, query.from_user.id
-        )
-    except Exception as e:
-        logger.warning(
-            "Could not verify Whop payment for order %s: %s", order_id, e
-        )
-        if query.message:
-            await query.message.reply_text(
-                tr(language, "premium_verify_error")
-            )
-        return
-
-    if not expires_at:
-        if query.message:
-            await query.message.reply_text(
-                tr(language, "premium_pending")
-            )
-        return
-
-    if query.message:
-        await query.message.reply_text(
-            tr(
-                language,
-                "premium_success",
-                expires=_format_premium_expiration(expires_at)
-            ),
-            parse_mode="HTML",
-        )
-
-async def check_latest_premium_payment(update, context, uid):
-    language = await get_user_language(uid) or "id"
-    order = await db_pool.execute_read(
-        "SELECT order_id FROM premium_orders "
-        "WHERE user_id=? AND status='pending' "
-        "ORDER BY order_id DESC LIMIT 1",
-        (uid,),
-        fetch_one=True,
-    )
-    if not order:
-        await update.message.reply_text(
-            tr(language, "premium_no_pending")
-        )
-        return
-    try:
-        expires_at = await verify_whop_order_payment(order[0], uid)
-    except Exception as e:
-        logger.warning(
-            "Could not verify latest Whop order for user %s: %s", uid, e
-        )
-        await update.message.reply_text(
-            tr(language, "premium_verify_error")
-        )
-        return
-    if expires_at:
-        await update.message.reply_text(
-            tr(
-                language,
-                "premium_success_plain",
-                expires=_format_premium_expiration(expires_at)
-            )
-        )
-    else:
-        await update.message.reply_text(
-            tr(language, "premium_pending_plain")
-        )
 
 async def claim_quota_callback(update, context):
     query = update.callback_query
@@ -2706,14 +2227,6 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CallbackQueryHandler(
             claim_quota_callback,
             pattern=r"^claim_quota:\d{4}-\d{2}-\d{2}:\d+$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            premium_buy_callback,
-            pattern=r"^premium_buy:(1d|7d|15d):\d+$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            premium_check_callback,
-            pattern=r"^premium_check:\d+$"
         ))
         application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("quota", profile_command))

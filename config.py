@@ -44,26 +44,5 @@ BACKUP_INTERVAL = 21600  # 6 jam
 BACKUP_DIR = "backups"
 MAX_BACKUPS = 10
 
-WHOP_API_KEY = os.getenv("WHOP_API_KEY", "").strip()
-WHOP_COMPANY_ID = os.getenv("WHOP_COMPANY_ID", "biz_lVUmWV3nvJp8Xs")
-WHOP_API_VERSION_DATE = "2026-09-29"
-WHOP_PREMIUM_TIERS = {
-    "1d": {
-        "plan_id": os.getenv("WHOP_PLAN_1D_ID", "plan_08oadDcUiJGjT"),
-        "days": 1,
-        "price": 1000,
-    },
-    "7d": {
-        "plan_id": os.getenv("WHOP_PLAN_7D_ID", "plan_uAsdJomxdYUcm"),
-        "days": 7,
-        "price": 5000,
-    },
-    "15d": {
-        "plan_id": os.getenv("WHOP_PLAN_15D_ID", "plan_ycDB2UwFbn9CK"),
-        "days": 15,
-        "price": 20000,
-    },
-}
-
 if not TOKEN:
     raise ValueError("❌ TELEGRAM_BOT_TOKEN not set in .env!")
