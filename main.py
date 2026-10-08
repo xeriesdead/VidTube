@@ -31,7 +31,8 @@ from telegram import (
 )
 from telegram.error import RetryAfter, Forbidden, BadRequest
 from telegram.ext import (
-    Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+    Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler,
+    MessageHandler, filters
 )
 
 from config import (
@@ -126,6 +127,7 @@ class DatabasePool:
 db_pool: Optional[DatabasePool] = None
 WIB = timezone(timedelta(hours=7))
 DAILY_QUOTA = 3
+MAX_SHARE_BONUSES_PER_DAY = 5
 _daily_quota_notice_task = None
 
 BOT_TEXT = {
@@ -160,9 +162,34 @@ BOT_TEXT = {
         ),
         "quota_empty": (
             "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
-            "Kamu sudah menggunakan 3 kuota hari ini. "
-            "Kuota berikutnya tersedia setelah pukul 00.00 WIB."
+            "Kamu sudah menggunakan semua {total} kuota hari ini. "
+            "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
+            "Buka postingan terbaru {channel} dan teruskan ke bot untuk mendapat "
+            "+1 kuota. Maksimal {max_bonus} bonus per hari, satu kali per postingan."
         ),
+        "share_post_button": "📢 Buka Postingan Terbaru",
+        "share_post_not_ready": (
+            "Tautan postingan terbaru belum tersedia. Admin perlu menyinkronkan "
+            "post terbaru channel terlebih dahulu."
+        ),
+        "share_bonus_success": (
+            "✅ Bonus +1 kuota berhasil ditambahkan.\n"
+            "Kuota tersisa: <b>{remaining}/{total}</b>\n"
+            "Bonus hari ini: <b>{bonus_count}/{max_bonus}</b>"
+        ),
+        "share_bonus_duplicate": "Postingan ini sudah pernah memberi bonus untuk akun Anda.",
+        "share_bonus_daily_limit": "Batas {max_bonus} bonus kuota hari ini sudah tercapai.",
+        "share_bonus_error": "Bonus kuota belum bisa ditambahkan. Coba lagi nanti.",
+        "share_post_wrong_channel": "Teruskan postingan dari channel resmi {channel}.",
+        "share_post_old": (
+            "Postingan ini bukan postingan terbaru {channel}. "
+            "Buka postingan terbaru melalui tombol di bawah."
+        ),
+        "share_post_seed_usage": (
+            "Balas pesan forward terbaru dari {channel} dengan perintah "
+            "/set_share_post untuk menyinkronkan postingan awal."
+        ),
+        "share_post_saved": "✅ Postingan terbaru untuk bonus kuota sudah disinkronkan.",
         "claim_success": "✅ 3 kuota berhasil diklaim. Selamat menggunakan!",
         "claim_already": "Kuota hari ini sudah diklaim.",
         "claim_expired": "Tombol klaim sudah kedaluwarsa. Gunakan /quota untuk kuota hari ini.",
@@ -231,9 +258,34 @@ BOT_TEXT = {
         ),
         "quota_empty": (
             "⛔ <b>Daily Quota Used</b>\n\n"
-            "You have used all 3 quotas today. Your next quota is available "
-            "after 00:00 WIB."
+            "You have used all {total} quotas today. Your next quota is available "
+            "after 00:00 WIB.\n\n"
+            "Open the latest {channel} post and forward it to the bot for +1 quota. "
+            "Up to {max_bonus} bonuses per day, once per post."
         ),
+        "share_post_button": "📢 Open Latest Post",
+        "share_post_not_ready": (
+            "The latest post link is not available yet. An admin needs to sync "
+            "the channel's current post first."
+        ),
+        "share_bonus_success": (
+            "✅ +1 quota added.\n"
+            "Remaining quota: <b>{remaining}/{total}</b>\n"
+            "Today's bonuses: <b>{bonus_count}/{max_bonus}</b>"
+        ),
+        "share_bonus_duplicate": "This post has already awarded a bonus to your account.",
+        "share_bonus_daily_limit": "You have reached today's limit of {max_bonus} quota bonuses.",
+        "share_bonus_error": "The quota bonus could not be added. Please try again later.",
+        "share_post_wrong_channel": "Forward a post from the official {channel} channel.",
+        "share_post_old": (
+            "This is not the latest {channel} post. "
+            "Open the latest post using the button below."
+        ),
+        "share_post_seed_usage": (
+            "Reply to the latest forwarded {channel} post with /set_share_post "
+            "to sync the initial post."
+        ),
+        "share_post_saved": "✅ The latest post for quota bonuses has been synced.",
         "claim_success": "✅ You claimed 3 quotas. Enjoy!",
         "claim_already": "Today's quota has already been claimed.",
         "claim_expired": "This claim button has expired. Use /quota to check today's quota.",
@@ -365,6 +417,28 @@ async def init_db():
                 language TEXT
             )
         """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS share_post_state(
+                channel_id INTEGER PRIMARY KEY,
+                latest_message_id INTEGER NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS share_quota_rewards(
+                user_id INTEGER NOT NULL,
+                post_id INTEGER NOT NULL,
+                reward_date TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id, post_id)
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_share_rewards_user_date "
+            "ON share_quota_rewards(user_id, reward_date)"
+        )
 
         existing_cols = [row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()]
         if "username" not in existing_cols:
@@ -547,12 +621,130 @@ async def consume_daily_quota(uid, today):
         finally:
             await db_pool.put(conn)
 
+async def get_share_bonus_count(uid, today=None):
+    today = today or datetime.now(WIB).date().isoformat()
+    row = await db_pool.execute_read(
+        "SELECT COUNT(*) FROM share_quota_rewards "
+        "WHERE user_id=? AND reward_date=?",
+        (uid, today),
+        fetch_one=True,
+    )
+    return int(row[0] or 0) if row else 0
+
+async def get_latest_share_post_id():
+    row = await db_pool.execute_read(
+        "SELECT latest_message_id FROM share_post_state WHERE channel_id=?",
+        (CHANNEL_ID,),
+        fetch_one=True,
+    )
+    return int(row[0]) if row else None
+
+async def save_latest_share_post(post_id):
+    await db_pool.execute_write(
+        """
+        INSERT INTO share_post_state (channel_id, latest_message_id)
+        VALUES (?, ?)
+        ON CONFLICT(channel_id) DO UPDATE SET
+            latest_message_id=MAX(latest_message_id, excluded.latest_message_id),
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (CHANNEL_ID, int(post_id)),
+    )
+
+def share_post_url(post_id):
+    channel_handle = CHANNEL.strip().rstrip("/")
+    if channel_handle.startswith("https://t.me/"):
+        channel_handle = channel_handle.removeprefix("https://t.me/").split("/", 1)[0]
+    channel_handle = channel_handle.lstrip("@")
+    return f"https://t.me/{channel_handle}/{int(post_id)}"
+
+def share_post_keyboard(post_id, language):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            tr(language, "share_post_button"),
+            url=share_post_url(post_id),
+        )
+    ]])
+
+def get_forwarded_channel_post(message):
+    origin = getattr(message, "forward_origin", None)
+    if origin:
+        origin_type = getattr(origin, "type", None)
+        origin_type = getattr(origin_type, "value", origin_type)
+        if origin_type == "channel":
+            chat = getattr(origin, "chat", None)
+            return (
+                getattr(chat, "id", None),
+                getattr(origin, "message_id", None),
+            )
+
+    chat = getattr(message, "forward_from_chat", None)
+    if chat and getattr(chat, "type", None) == "channel":
+        return (
+            getattr(chat, "id", None),
+            getattr(message, "forward_from_message_id", None),
+        )
+    return None
+
+async def grant_share_quota(uid, post_id, today=None):
+    """Grant one bonus per user/post, capped at five rewards per WIB day."""
+    today = today or datetime.now(WIB).date().isoformat()
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT quota, quota_date FROM users WHERE user_id=?",
+                (uid,),
+            )
+            user_row = cursor.fetchone()
+            if not user_row:
+                return "user_not_found", 0, DAILY_QUOTA
+
+            current_quota = max(0, int(user_row[0] or 0))
+            quota_date = user_row[1]
+            cursor.execute(
+                "SELECT 1 FROM share_quota_rewards WHERE user_id=? AND post_id=?",
+                (uid, post_id),
+            )
+            if cursor.fetchone():
+                return "duplicate", current_quota if quota_date == today else 0, DAILY_QUOTA
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM share_quota_rewards "
+                "WHERE user_id=? AND reward_date=?",
+                (uid, today),
+            )
+            bonus_count = int(cursor.fetchone()[0] or 0)
+            if bonus_count >= MAX_SHARE_BONUSES_PER_DAY:
+                return "daily_limit", current_quota if quota_date == today else 0, (
+                    DAILY_QUOTA + bonus_count
+                )
+
+            cursor.execute(
+                "INSERT INTO share_quota_rewards (user_id, post_id, reward_date) "
+                "VALUES (?, ?, ?)",
+                (uid, post_id, today),
+            )
+            remaining = current_quota + 1 if quota_date == today else DAILY_QUOTA + 1
+            cursor.execute(
+                "UPDATE users SET quota=?, quota_date=? WHERE user_id=?",
+                (remaining, today, uid),
+            )
+            conn.commit()
+            return "success", remaining, DAILY_QUOTA + bonus_count + 1
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
+
 async def refund_daily_quota(uid, today):
     try:
         await db_pool.execute_write(
             "UPDATE users SET quota=MIN(?, quota+1) "
             "WHERE user_id=? AND quota_date=?",
-            (DAILY_QUOTA, uid, today)
+            (DAILY_QUOTA + MAX_SHARE_BONUSES_PER_DAY, uid, today)
         )
     except Exception as e:
         logger.error(f"Error refunding daily quota for {uid}: {e}")
@@ -866,7 +1058,19 @@ async def start_command(update, context):
             ]])
             message = tr(language, "quota_unclaimed")
         else:
-            message = tr(language, "quota_empty")
+            bonus_count = await get_share_bonus_count(uid, quota_date)
+            message = tr(
+                language,
+                "quota_empty",
+                total=DAILY_QUOTA + bonus_count,
+                max_bonus=MAX_SHARE_BONUSES_PER_DAY,
+                channel=CHANNEL,
+            )
+            latest_post_id = await get_latest_share_post_id()
+            if latest_post_id is not None:
+                reply_markup = share_post_keyboard(latest_post_id, language)
+            else:
+                message += f"\n\n{tr(language, 'share_post_not_ready')}"
         await update.message.reply_text(
             message,
             parse_mode="HTML",
@@ -948,11 +1152,103 @@ async def start_command(update, context):
 
         context.application.create_task(delete_later())
 
+async def set_share_post_command(update, context):
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Admin only")
+        return
+
+    forwarded_message = update.message.reply_to_message
+    forwarded_post = (
+        get_forwarded_channel_post(forwarded_message)
+        if forwarded_message else None
+    )
+    if not forwarded_post:
+        await update.message.reply_text(
+            tr(language, "share_post_seed_usage", channel=CHANNEL)
+        )
+        return
+
+    source_chat_id, post_id = forwarded_post
+    if source_chat_id != CHANNEL_ID or not post_id:
+        await update.message.reply_text(
+            tr(language, "share_post_wrong_channel", channel=CHANNEL)
+        )
+        return
+
+    await save_latest_share_post(post_id)
+    latest_post_id = await get_latest_share_post_id()
+    await update.message.reply_text(
+        tr(language, "share_post_saved"),
+        reply_markup=share_post_keyboard(latest_post_id, language),
+    )
+
+async def handle_share_forward(update, context):
+    message = update.message
+    if not message:
+        return
+
+    forwarded_post = get_forwarded_channel_post(message)
+    if not forwarded_post:
+        return
+
+    source_chat_id, post_id = forwarded_post
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+
+    if source_chat_id != CHANNEL_ID:
+        await message.reply_text(
+            tr(language, "share_post_wrong_channel", channel=CHANNEL)
+        )
+        raise ApplicationHandlerStop
+
+    latest_post_id = await get_latest_share_post_id()
+    if latest_post_id is None:
+        if not is_admin(user.id):
+            await message.reply_text(tr(language, "share_post_not_ready"))
+        raise ApplicationHandlerStop
+
+    if not post_id or int(post_id) != latest_post_id:
+        await message.reply_text(
+            tr(language, "share_post_old", channel=CHANNEL),
+            reply_markup=share_post_keyboard(latest_post_id, language),
+        )
+        raise ApplicationHandlerStop
+
+    await save_user(user.id, user.username or "unknown")
+    status, remaining, total = await grant_share_quota(user.id, post_id)
+    if status == "success":
+        bonus_count = await get_share_bonus_count(user.id)
+        response = tr(
+            language,
+            "share_bonus_success",
+            remaining=remaining,
+            total=total,
+            bonus_count=bonus_count,
+            max_bonus=MAX_SHARE_BONUSES_PER_DAY,
+        )
+    elif status == "duplicate":
+        response = tr(language, "share_bonus_duplicate")
+    elif status == "daily_limit":
+        response = tr(
+            language,
+            "share_bonus_daily_limit",
+            max_bonus=MAX_SHARE_BONUSES_PER_DAY,
+        )
+    else:
+        response = tr(language, "share_bonus_error")
+
+    await message.reply_text(response, parse_mode="HTML")
+    raise ApplicationHandlerStop
+
 async def build_profile_message(user):
     uid = user.id
     language = await get_user_language(uid) or "id"
     today = datetime.now(WIB).date().isoformat()
     remaining, claimed_today = await get_daily_quota(uid, today)
+    bonus_count = await get_share_bonus_count(uid, today)
+    total_quota = DAILY_QUOTA + bonus_count
     total_files = await db_pool.execute_read(
         """
         SELECT COUNT(m.id)
@@ -964,7 +1260,7 @@ async def build_profile_message(user):
         fetch_one=True
     )
     total_files = total_files[0] if total_files else 0
-    used_today = DAILY_QUOTA - remaining if claimed_today else 0
+    used_today = total_quota - remaining if claimed_today else 0
 
     name = html_escape(user.full_name or "Pengguna")
     username = f"@{html_escape(user.username)}" if user.username else "-"
@@ -973,7 +1269,7 @@ async def build_profile_message(user):
         "profile_claimed" if claimed_today else "profile_unclaimed"
     )
     quota_status = (
-        f"{tr(language, 'profile_remaining')}: <b>{remaining}/{DAILY_QUOTA}</b>\n"
+        f"{tr(language, 'profile_remaining')}: <b>{remaining}/{total_quota}</b>\n"
         f"{tr(language, 'profile_used')}: <b>{used_today}</b>\n"
         f"{tr(language, 'profile_claim_status')}: <b>{claim_status}</b>\n"
         f"{tr(language, 'profile_reset')}"
@@ -2220,6 +2516,10 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_error_handler(error_handler)
 
         application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(
+            MessageHandler(filters.ALL, handle_share_forward),
+            group=-1,
+        )
         application.add_handler(CallbackQueryHandler(
             close_expired_notification,
             pattern=r"^expired_close:\d+$"
@@ -2231,6 +2531,9 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("quota", profile_command))
         application.add_handler(CommandHandler("claim", claim_quota_command))
+        application.add_handler(
+            CommandHandler("set_share_post", set_share_post_command)
+        )
         application.add_handler(CommandHandler("language", language_command))
         application.add_handler(CommandHandler("menu", menu_command))
         application.add_handler(CommandHandler("bc", broadcast_command))
@@ -2275,12 +2578,13 @@ async def lifespan(fastapi_app: FastAPI):
                 return
 
             full_webhook_url = WEBHOOK_URL.rstrip("/") + WEBHOOK_PATH
+            allowed_updates = ["message", "callback_query", "channel_post"]
             try:
                 wh = await application.bot.get_webhook_info()
                 if wh.url != full_webhook_url:
                     await application.bot.set_webhook(
                         url=full_webhook_url,
-                        allowed_updates=["message", "callback_query"],
+                        allowed_updates=allowed_updates,
                         drop_pending_updates=True,
                     )
                     logger.info(f"✅ Webhook set: {full_webhook_url}")
@@ -2292,6 +2596,16 @@ async def lifespan(fastapi_app: FastAPI):
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                         f"📌 Pastikan cron-job.org sudah hit <code>/cron</code> setiap 5 menit."
                     )
+                elif (
+                    wh.allowed_updates is not None
+                    and not set(allowed_updates).issubset(wh.allowed_updates)
+                ):
+                    await application.bot.set_webhook(
+                        url=full_webhook_url,
+                        allowed_updates=allowed_updates,
+                        drop_pending_updates=False,
+                    )
+                    logger.info("✅ Webhook update types synced without dropping pending updates")
                 else:
                     logger.info(f"✅ Webhook sudah benar: {full_webhook_url}")
             except Exception as e:
@@ -2351,6 +2665,14 @@ async def telegram_webhook(request: Request):
     """Endpoint yang dipanggil Telegram setiap ada update baru."""
     try:
         data = await request.json()
+        channel_post = data.get("channel_post")
+        if channel_post:
+            channel_chat = channel_post.get("chat", {})
+            if (
+                int(channel_chat.get("id", 0)) == CHANNEL_ID
+                and channel_post.get("message_id")
+            ):
+                await save_latest_share_post(channel_post["message_id"])
         update = Update.de_json(data, application.bot)
         await application.process_update(update)
         return Response(content="ok", status_code=200)
