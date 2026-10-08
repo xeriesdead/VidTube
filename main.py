@@ -1950,74 +1950,98 @@ async def notify_admin(bot, message: str):
         except Exception as e:
             logger.warning(f"Failed to notify admin {admin_id}: {e}")
 
-async def send_backup_to_admin(application, backup_path, backup_name, file_size):
+async def send_backup_to_admin(
+    application, backup_path, backup_name, file_size, chat_id=None
+):
+    destination_chat_id = BACKUP_CHAT_ID if chat_id is None else chat_id
     try:
         with open(backup_path, "rb") as f:
             await application.bot.send_document(
-                BACKUP_CHAT_ID,
+                destination_chat_id,
                 f,
                 caption=f"📦 Database Backup\n⏰ {backup_name}\n💾 Size: {file_size / (1024*1024):.2f} MB"
             )
-        logger.info("✅ Backup sent to admin")
+        logger.info(f"✅ Backup sent to chat {destination_chat_id}")
+        return True
     except Exception as e:
         logger.error(f"Error sending backup: {e}")
+        return False
 
-async def create_backup(application):
+async def create_backup(application, additional_chat_id=None):
     try:
         os.makedirs(BACKUP_DIR, exist_ok=True)
+
+        if not os.path.isfile(DATABASE_PATH):
+            raise FileNotFoundError("Active database file does not exist")
 
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         raw_backup_name = f"database_{ts}.db"
         raw_backup_path = os.path.join(BACKUP_DIR, raw_backup_name)
 
-        if os.path.exists(DATABASE_PATH):
-            # Use SQLite's online backup API so the backup includes committed
-            # WAL data and remains consistent while the bot is running.
-            source_conn = sqlite3.connect(DATABASE_PATH, timeout=20)
-            backup_conn = sqlite3.connect(raw_backup_path)
-            try:
-                source_conn.backup(backup_conn)
-            finally:
-                backup_conn.close()
-                source_conn.close()
+        # Use SQLite's online backup API so the snapshot includes committed
+        # WAL data and remains consistent while the bot is running.
+        source_conn = sqlite3.connect(DATABASE_PATH, timeout=20)
+        backup_conn = sqlite3.connect(raw_backup_path)
+        try:
+            source_conn.backup(backup_conn)
+        finally:
+            backup_conn.close()
+            source_conn.close()
 
-            # Telegram Bot API allows the bot to send larger files than it can
-            # download. Compress new backups so they can later be restored
-            # through /import_db as long as the compressed file is under 20 MB.
-            backup_name = f"{raw_backup_name}.gz"
-            backup_path = os.path.join(BACKUP_DIR, backup_name)
-            with open(raw_backup_path, "rb") as source_file, gzip.open(
-                backup_path, "wb", compresslevel=6
-            ) as compressed_file:
-                shutil.copyfileobj(source_file, compressed_file)
-            os.remove(raw_backup_path)
-            file_size = os.path.getsize(backup_path)
+        # Compressed backups can be restored with /import_db.
+        backup_name = f"{raw_backup_name}.gz"
+        backup_path = os.path.join(BACKUP_DIR, backup_name)
+        with open(raw_backup_path, "rb") as source_file, gzip.open(
+            backup_path, "wb", compresslevel=6
+        ) as compressed_file:
+            shutil.copyfileobj(source_file, compressed_file)
+        os.remove(raw_backup_path)
+        file_size = os.path.getsize(backup_path)
 
-            logger.info(f"📦 Backup created: {backup_path} ({file_size/(1024*1024):.2f} MB)")
+        logger.info(f"📦 Backup created: {backup_path} ({file_size/(1024*1024):.2f} MB)")
 
-            try:
-                await db_pool.execute_write(
-                    "INSERT INTO backup_log (backup_name, file_size) VALUES (?, ?)",
-                    (backup_name, file_size)
-                )
-            except Exception as e:
-                logger.error(f"Error logging backup: {e}")
+        try:
+            await db_pool.execute_write(
+                "INSERT INTO backup_log (backup_name, file_size) VALUES (?, ?)",
+                (backup_name, file_size)
+            )
+        except Exception as e:
+            logger.error(f"Error logging backup: {e}")
 
-            await send_backup_to_admin(application, backup_path, backup_name, file_size)
+        recipient_ids = [BACKUP_CHAT_ID]
+        if additional_chat_id is not None:
+            recipient_ids.append(additional_chat_id)
+        recipient_ids = list(dict.fromkeys(recipient_ids))
 
-            try:
-                files = sorted(os.listdir(BACKUP_DIR))
-                if len(files) > MAX_BACKUPS:
-                    for old_file in files[:-MAX_BACKUPS]:
-                        try:
-                            os.remove(os.path.join(BACKUP_DIR, old_file))
-                            logger.info(f"🗑️ Old backup deleted: {old_file}")
-                        except:
-                            pass
-            except Exception as e:
-                logger.error(f"Error cleaning backups: {e}")
+        delivered_to = []
+        failed_to = []
+        for chat_id in recipient_ids:
+            sent = await send_backup_to_admin(
+                application, backup_path, backup_name, file_size, chat_id
+            )
+            (delivered_to if sent else failed_to).append(chat_id)
+
+        try:
+            files = sorted(os.listdir(BACKUP_DIR))
+            if len(files) > MAX_BACKUPS:
+                for old_file in files[:-MAX_BACKUPS]:
+                    try:
+                        os.remove(os.path.join(BACKUP_DIR, old_file))
+                        logger.info(f"🗑️ Old backup deleted: {old_file}")
+                    except:
+                        pass
+        except Exception as e:
+            logger.error(f"Error cleaning backups: {e}")
+
+        return {
+            "backup_name": backup_name,
+            "file_size": file_size,
+            "delivered_to": delivered_to,
+            "failed_to": failed_to,
+        }
     except Exception as e:
         logger.error(f"Backup error: {e}")
+        return None
 
 # State untuk cron backup
 _last_backup_time: Optional[datetime] = None
@@ -2049,12 +2073,36 @@ async def backup_now_command(update, context):
     if not is_admin(uid):
         return
     msg = await update.message.reply_text("⏳ Membuat backup database, harap tunggu...")
-    try:
-        await create_backup(context.application)
-        await msg.edit_text("✅ Backup berhasil dikirim ke Telegram!")
-    except Exception as e:
-        logger.error(f"backup_now_command error: {e}")
-        await msg.edit_text(f"❌ Gagal membuat backup: {e}")
+    result = await create_backup(context.application, additional_chat_id=uid)
+    if not result:
+        await msg.edit_text(
+            "❌ Backup database gagal dibuat. Database aktif tidak ditemukan "
+            "atau snapshot tidak dapat disiapkan."
+        )
+        return
+
+    if uid not in result["delivered_to"]:
+        if result["delivered_to"]:
+            await msg.edit_text(
+                "❌ Snapshot database dibuat, tetapi tidak dapat dikirim ke chat "
+                "ini. Salinan berhasil dikirim ke chat backup yang dikonfigurasi."
+            )
+        else:
+            await msg.edit_text(
+                "❌ Snapshot database dibuat, tetapi gagal dikirim ke Telegram. "
+                "Periksa koneksi bot dan coba lagi."
+            )
+        return
+
+    message = (
+        "✅ Backup database terbaru sudah dikirim ke chat ini.\n"
+        f"📄 File: <code>{result['backup_name']}</code>\n"
+        "Simpan file ini sebelum redeploy. Jika database aktif hilang setelah "
+        "deploy, kirim file ini ke bot dengan caption <code>/import_db</code>."
+    )
+    if BACKUP_CHAT_ID != uid and BACKUP_CHAT_ID not in result["delivered_to"]:
+        message += "\n⚠️ Salinan ke chat backup yang dikonfigurasi gagal dikirim."
+    await msg.edit_text(message, parse_mode="HTML")
 
 def unpack_database_upload(upload_path, file_name, destination_path):
     """Unpack .db/.db.gz/.zip upload into a SQLite database file."""
