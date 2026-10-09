@@ -165,9 +165,10 @@ BOT_TEXT = {
             "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
             "Kamu sudah menggunakan semua {total} kuota hari ini. "
             "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
-            "Buka channel {channel} dan teruskan postingan mana saja ke bot untuk "
-            "mendapat +1 kuota. Maksimal {max_bonus} bonus per akun per hari; "
-            "setiap postingan bisa memberi bonus sekali sehari."
+            "Reaction pada postingan {channel} memberi +1 kuota permanen sekali "
+            "per akun per postingan. Menghapus atau mengganti reaction tidak "
+            "mengurangi kuota yang sudah didapat. Bonus dari meneruskan postingan "
+            "ke bot tetap tersedia, maksimal {max_bonus} per akun per hari."
         ),
         "share_post_button": "📢 Buka Channel VidTube",
         "share_bonus_success": (
@@ -215,6 +216,7 @@ BOT_TEXT = {
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
         "profile_remaining": "├ TERSISA",
+        "profile_reaction_quota": "├ BONUS REACTION TERSIMPAN",
         "profile_used": "├ TERPAKAI HARI INI",
         "profile_claim_status": "└ STATUS",
         "profile_claimed": "Aktif",
@@ -265,9 +267,10 @@ BOT_TEXT = {
             "⛔ <b>Daily Quota Used</b>\n\n"
             "You have used all {total} quotas today. Your next quota is available "
             "after 00:00 WIB.\n\n"
-            "Open the {channel} channel and forward any post to the bot for +1 quota. "
-            "Up to {max_bonus} bonuses per account per day; each post can award a "
-            "bonus once a day."
+            "A reaction to a {channel} post gives +1 permanent quota once per "
+            "account per post. Removing or changing the reaction will not revoke "
+            "earned quota. Forwarding posts to the bot still gives a separate "
+            "bonus, up to {max_bonus} per account per day."
         ),
         "share_post_button": "📢 Open VidTube Channel",
         "share_bonus_success": (
@@ -315,6 +318,7 @@ BOT_TEXT = {
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
         "profile_remaining": "├ REMAINING",
+        "profile_reaction_quota": "├ SAVED REACTION QUOTA",
         "profile_used": "├ USED TODAY",
         "profile_claim_status": "└ STATUS",
         "profile_claimed": "Claimed",
@@ -424,7 +428,8 @@ async def init_db():
                 quota_date TEXT,
                 admin_quota INTEGER NOT NULL DEFAULT 0,
                 quota_notice_date TEXT,
-                language TEXT
+                language TEXT,
+                reaction_quota INTEGER NOT NULL DEFAULT 0
             )
         """)
 
@@ -443,6 +448,15 @@ async def init_db():
                 reward_date TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY(user_id, post_id, reward_date)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS reaction_quota_rewards(
+                user_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                post_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id, channel_id, post_id)
             )
         """)
         reward_columns = c.execute(
@@ -507,6 +521,11 @@ async def init_db():
         if "language" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN language TEXT")
             logger.info("✅ Migrated users table: added language column")
+        if "reaction_quota" not in existing_cols:
+            c.execute(
+                "ALTER TABLE users ADD COLUMN reaction_quota INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("✅ Migrated users table: added reaction_quota column")
 
         # Give existing accounts their initial daily quota when this feature is
         # first enabled. Later days require the user to claim the notification.
@@ -617,6 +636,14 @@ async def get_daily_quota(uid, today=None):
         return 0, False
     return max(0, int(row[0] or 0)), True
 
+async def get_reaction_quota(uid):
+    row = await db_pool.execute_read(
+        "SELECT reaction_quota FROM users WHERE user_id=?",
+        (uid,),
+        fetch_one=True,
+    )
+    return max(0, int(row[0] or 0)) if row else 0
+
 async def claim_daily_quota(uid, today=None):
     today = today or datetime.now(WIB).date().isoformat()
     async with db_pool.write_lock:
@@ -644,7 +671,7 @@ async def claim_daily_quota(uid, today=None):
             await db_pool.put(conn)
 
 async def consume_daily_quota(uid, today):
-    """Atomically spend one quota for one successfully prepared media link."""
+    """Spend daily quota first, then a saved reaction quota if needed."""
     async with db_pool.write_lock:
         conn = await db_pool.get()
         try:
@@ -655,14 +682,29 @@ async def consume_daily_quota(uid, today):
                 (uid, today)
             )
             consumed = cursor.rowcount == 1
+            quota_source = "daily" if consumed else None
+            if not consumed:
+                cursor.execute(
+                    "UPDATE users SET reaction_quota=reaction_quota-1 "
+                    "WHERE user_id=? AND reaction_quota>0",
+                    (uid,)
+                )
+                consumed = cursor.rowcount == 1
+                if consumed:
+                    quota_source = "reaction"
             conn.commit()
             cursor.execute(
-                "SELECT quota FROM users WHERE user_id=? AND quota_date=?",
-                (uid, today)
+                "SELECT quota, quota_date, reaction_quota "
+                "FROM users WHERE user_id=?",
+                (uid,)
             )
             row = cursor.fetchone()
-            remaining = max(0, int(row[0] or 0)) if row else 0
-            return consumed, remaining
+            daily_remaining = (
+                max(0, int(row[0] or 0))
+                if row and row[1] == today else 0
+            )
+            reaction_remaining = max(0, int(row[2] or 0)) if row else 0
+            return consumed, daily_remaining + reaction_remaining, quota_source
         except Exception:
             conn.rollback()
             raise
@@ -814,8 +856,88 @@ async def grant_share_quota(uid, post_id, today=None):
         finally:
             await db_pool.put(conn)
 
-async def refund_daily_quota(uid, today):
+async def grant_reaction_quota(uid, post_id):
+    """Save one permanent quota for a user's first reaction to a channel post."""
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR IGNORE INTO reaction_quota_rewards "
+                "(user_id, channel_id, post_id) VALUES (?, ?, ?)",
+                (uid, CHANNEL_ID, post_id),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                return "duplicate", 0
+
+            cursor.execute(
+                "UPDATE users SET reaction_quota=reaction_quota+1 "
+                "WHERE user_id=?",
+                (uid,),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"User {uid} missing while granting reaction quota"
+                )
+            cursor.execute(
+                "SELECT reaction_quota FROM users WHERE user_id=?",
+                (uid,),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            return "success", max(0, int(row[0] or 0)) if row else 0
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
+
+async def handle_channel_reaction(reaction_update):
+    if not isinstance(reaction_update, dict):
+        return
+    chat = reaction_update.get("chat")
+    user = reaction_update.get("user")
+    reactions = reaction_update.get("new_reaction")
+    if not isinstance(chat, dict) or not isinstance(user, dict):
+        return
+    if not isinstance(reactions, list) or not reactions:
+        return
+
     try:
+        source_chat_id = int(chat.get("id", 0))
+        post_id = int(reaction_update.get("message_id", 0))
+        user_id = int(user.get("id", 0))
+    except (TypeError, ValueError):
+        return
+
+    if (
+        source_chat_id != CHANNEL_ID
+        or post_id <= 0
+        or user_id <= 0
+        or user.get("is_bot", False)
+    ):
+        return
+
+    await save_user(user_id, user.get("username") or "unknown")
+    status, balance = await grant_reaction_quota(user_id, post_id)
+    if status == "success":
+        logger.info(
+            "Permanent reaction quota added for user=%s post=%s balance=%s",
+            user_id,
+            post_id,
+            balance,
+        )
+
+async def refund_daily_quota(uid, today, quota_source="daily"):
+    try:
+        if quota_source == "reaction":
+            await db_pool.execute_write(
+                "UPDATE users SET reaction_quota=reaction_quota+1 "
+                "WHERE user_id=?",
+                (uid,)
+            )
+            return
         await db_pool.execute_write(
             "UPDATE users SET quota=MIN(? + admin_quota, quota+1) "
             "WHERE user_id=? AND quota_date=?",
@@ -1197,7 +1319,7 @@ async def start_command(update, context):
         return
 
     quota_date = datetime.now(WIB).date().isoformat()
-    consumed, _ = await consume_daily_quota(uid, quota_date)
+    consumed, _, quota_source = await consume_daily_quota(uid, quota_date)
     if not consumed:
         _, claimed_today = await get_daily_quota(uid, quota_date)
         reply_markup = None
@@ -1240,7 +1362,7 @@ async def start_command(update, context):
     await asyncio.gather(*send_tasks, return_exceptions=True)
 
     if not sent_ids:
-        await refund_daily_quota(uid, quota_date)
+        await refund_daily_quota(uid, quota_date, quota_source)
 
     if sent_ids:
         media_message_ids = list(sent_ids)
@@ -1415,6 +1537,8 @@ async def build_profile_message(user):
     )
     quota_status = (
         f"{tr(language, 'profile_remaining')}: <b>{remaining}/{total_quota}</b>\n"
+        f"{tr(language, 'profile_reaction_quota')}: "
+        f"<b>{await get_reaction_quota(uid)}</b>\n"
         f"{tr(language, 'profile_used')}: <b>{used_today}</b>\n"
         f"{tr(language, 'profile_claim_status')}: <b>{claim_status}</b>\n"
         f"{tr(language, 'profile_reset')}"
@@ -2793,7 +2917,12 @@ async def lifespan(fastapi_app: FastAPI):
                 return
 
             full_webhook_url = WEBHOOK_URL.rstrip("/") + WEBHOOK_PATH
-            allowed_updates = ["message", "callback_query", "channel_post"]
+            allowed_updates = [
+                "message",
+                "callback_query",
+                "channel_post",
+                "message_reaction",
+            ]
             try:
                 wh = await application.bot.get_webhook_info()
                 if wh.url != full_webhook_url:
@@ -2812,8 +2941,8 @@ async def lifespan(fastapi_app: FastAPI):
                         f"📌 Pastikan cron-job.org sudah hit <code>/cron</code> setiap 5 menit."
                     )
                 elif (
-                    wh.allowed_updates is not None
-                    and not set(allowed_updates).issubset(wh.allowed_updates)
+                    wh.allowed_updates is None
+                    or not set(allowed_updates).issubset(wh.allowed_updates)
                 ):
                     await application.bot.set_webhook(
                         url=full_webhook_url,
@@ -2888,6 +3017,11 @@ async def telegram_webhook(request: Request):
                 and channel_post.get("message_id")
             ):
                 await save_latest_share_post(channel_post["message_id"])
+        if "message_reaction" in data:
+            # PTB 20.7 does not model message_reaction updates. Process the raw
+            # webhook payload and keep it out of Update.de_json().
+            await handle_channel_reaction(data.get("message_reaction"))
+            return Response(content="ok", status_code=200)
         update = Update.de_json(data, application.bot)
         await application.process_update(update)
         return Response(content="ok", status_code=200)

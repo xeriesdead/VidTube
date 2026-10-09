@@ -35,6 +35,16 @@ Telegram bot for media sharing with admin upload, broadcast, and scheduled broad
 
 Deployed automatically via GitHub push. Railway sets `RAILWAY_PUBLIC_DOMAIN` which the bot uses to register its webhook.
 
+### Permanent reaction quota
+
+- The bot must be an administrator in the VidTube channel to receive Telegram
+  `message_reaction` updates.
+- The first reaction by a user on a post adds one permanent quota. Each
+  user/channel-post pair is credited once; removing or changing the reaction
+  does not revoke or duplicate the credit.
+- Saved reaction quotas are used after the user's current daily quota runs out.
+  Existing forwarded-post bonuses remain available and keep their daily limit.
+
 ### Persistent database storage
 
 SQLite must be stored on a Railway persistent Volume; the normal service filesystem
