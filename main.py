@@ -1401,9 +1401,13 @@ async def close_expired_notification(update, context):
 async def send_media_item(bot, uid, file_id, media_type, caption, sent_ids):
     try:
         if media_type == "photo":
-            msg = await bot.send_photo(uid, file_id, caption=caption or "")
+            msg = await bot.send_photo(
+                uid, file_id, caption=caption or "", protect_content=True
+            )
         elif media_type == "video":
-            msg = await bot.send_video(uid, file_id, caption=caption or "")
+            msg = await bot.send_video(
+                uid, file_id, caption=caption or "", protect_content=True
+            )
         else:
             return
 
@@ -1520,7 +1524,10 @@ async def broadcast_command(update, context):
 
             try:
                 await asyncio.wait_for(
-                    msg_to_send.copy(user_id),
+                    msg_to_send.copy(
+                        user_id,
+                        protect_content=msg_to_send.effective_attachment is not None
+                    ),
                     timeout=10.0
                 )
                 sent += 1
@@ -1534,7 +1541,13 @@ async def broadcast_command(update, context):
                 logger.warning(f"FloodWait {wait_sec}s saat broadcast")
                 await asyncio.sleep(wait_sec)
                 try:
-                    await asyncio.wait_for(msg_to_send.copy(user_id), timeout=10.0)
+                    await asyncio.wait_for(
+                        msg_to_send.copy(
+                            user_id,
+                            protect_content=msg_to_send.effective_attachment is not None
+                        ),
+                        timeout=10.0
+                    )
                     sent += 1
                 except Exception:
                     failed_other += 1
@@ -1758,13 +1771,21 @@ async def _send_one_scheduled(bot, user_id, msg_type, file_id, text_content, cap
     if msg_type == "text":
         await bot.send_message(user_id, text_content)
     elif msg_type == "photo":
-        await bot.send_photo(user_id, file_id, caption=cap)
+        await bot.send_photo(
+            user_id, file_id, caption=cap, protect_content=True
+        )
     elif msg_type == "video":
-        await bot.send_video(user_id, file_id, caption=cap)
+        await bot.send_video(
+            user_id, file_id, caption=cap, protect_content=True
+        )
     elif msg_type == "document":
-        await bot.send_document(user_id, file_id, caption=cap)
+        await bot.send_document(
+            user_id, file_id, caption=cap, protect_content=True
+        )
     elif msg_type == "animation":
-        await bot.send_animation(user_id, file_id, caption=cap)
+        await bot.send_animation(
+            user_id, file_id, caption=cap, protect_content=True
+        )
 
 async def _execute_scheduled_broadcast(row):
     sched_id, admin_id, schedule_time, msg_type, file_id, text_content, caption = row
