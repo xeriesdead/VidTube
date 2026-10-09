@@ -42,13 +42,25 @@ can be reset when a deployment or instance changes.
 
 - Add a Railway Volume and mount it at `/data`
 - Set `DATABASE_PATH=/data/database.db` in Railway Variables
-- Redeploy, then restore the latest Telegram `.db` backup with `/import_db`.
+- With an existing database, back it up before attaching or changing the volume,
+  then restore the latest Telegram `.db` backup with `/import_db`.
   For backups larger than Telegram's Bot API download limit, compress them as
   `.db.gz` or `.zip`; `/import_db` extracts and validates them automatically.
 
 The bot validates the SQLite file before replacing the active database and uses
 SQLite's online backup API for new backups. New backups are gzip-compressed so
 they are easier to download again through Telegram's bot file-size limit.
+
+### Backup before a redeploy
+
+- From an admin account, run `/backup_now` on the currently deployed bot before
+  pushing a commit that will trigger a Railway deployment.
+- The bot sends a current `.db.gz` snapshot to the admin who ran the command and
+  to `BACKUP_CHAT_ID`, and reports whether delivery succeeded.
+- If the active database is stored on the Railway Volume at `/data`, it persists
+  through deployments and normally does not need to be restored. Without a
+  Volume, keep the backup and use `/import_db` after deployment if the active
+  database has reset.
 
 ## User Preferences
 
