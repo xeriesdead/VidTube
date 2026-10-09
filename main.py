@@ -128,6 +128,7 @@ db_pool: Optional[DatabasePool] = None
 WIB = timezone(timedelta(hours=7))
 DAILY_QUOTA = 3
 MAX_SHARE_BONUSES_PER_DAY = 10
+MAX_ADMIN_QUOTA_PER_COMMAND = 1000
 _daily_quota_notice_task = None
 
 BOT_TEXT = {
@@ -189,6 +190,13 @@ BOT_TEXT = {
         "share_post_saved": "✅ Postingan terbaru untuk bonus kuota sudah disinkronkan.",
         "claim_success": "✅ 3 kuota berhasil diklaim. Selamat menggunakan!",
         "claim_already": "Kuota hari ini sudah diklaim.",
+        "admin_quota_usage": "Gunakan /add_quota <jumlah> (1–1000).",
+        "admin_quota_added": (
+            "✅ Berhasil menambahkan {amount} kuota testing.\n"
+            "Sisa kuota hari ini: <b>{remaining}/{total}</b>\n"
+            "Kuota tambahan berlaku sampai pukul 00.00 WIB."
+        ),
+        "admin_quota_error": "Kuota tambahan tidak berhasil disimpan. Coba lagi.",
         "claim_expired": "Tombol klaim sudah kedaluwarsa. Gunakan /quota untuk kuota hari ini.",
         "claim_invalid": "Tombol klaim tidak valid.",
         "claim_not_yours": "Tombol klaim ini bukan milik Anda.",
@@ -282,6 +290,13 @@ BOT_TEXT = {
         "share_post_saved": "✅ The latest post for quota bonuses has been synced.",
         "claim_success": "✅ You claimed 3 quotas. Enjoy!",
         "claim_already": "Today's quota has already been claimed.",
+        "admin_quota_usage": "Use /add_quota <amount> (1–1000).",
+        "admin_quota_added": (
+            "✅ Added {amount} testing quotas.\n"
+            "Remaining quota today: <b>{remaining}/{total}</b>\n"
+            "Extra quota expires at 00:00 WIB."
+        ),
+        "admin_quota_error": "Could not save the extra quota. Please try again.",
         "claim_expired": "This claim button has expired. Use /quota to check today's quota.",
         "claim_invalid": "This claim button is invalid.",
         "claim_not_yours": "This claim button does not belong to you.",
@@ -407,6 +422,7 @@ async def init_db():
                 joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 quota INTEGER NOT NULL DEFAULT 3,
                 quota_date TEXT,
+                admin_quota INTEGER NOT NULL DEFAULT 0,
                 quota_notice_date TEXT,
                 language TEXT
             )
@@ -480,6 +496,11 @@ async def init_db():
         if "quota_date" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN quota_date TEXT")
             logger.info("✅ Migrated users table: added quota_date column")
+        if "admin_quota" not in existing_cols:
+            c.execute(
+                "ALTER TABLE users ADD COLUMN admin_quota INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("✅ Migrated users table: added admin_quota column")
         if "quota_notice_date" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN quota_notice_date TEXT")
             logger.info("✅ Migrated users table: added quota_notice_date column")
@@ -603,7 +624,7 @@ async def claim_daily_quota(uid, today=None):
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE users SET quota=?, quota_date=? "
+                "UPDATE users SET quota=?, quota_date=?, admin_quota=0 "
                 "WHERE user_id=? AND (quota_date IS NULL OR quota_date<>?)",
                 (DAILY_QUOTA, today, uid, today)
             )
@@ -657,6 +678,17 @@ async def get_share_bonus_count(uid, today=None):
         fetch_one=True,
     )
     return int(row[0] or 0) if row else 0
+
+async def get_admin_quota_count(uid, today=None):
+    today = today or datetime.now(WIB).date().isoformat()
+    row = await db_pool.execute_read(
+        "SELECT admin_quota, quota_date FROM users WHERE user_id=?",
+        (uid,),
+        fetch_one=True,
+    )
+    if not row or row[1] != today:
+        return 0
+    return max(0, int(row[0] or 0))
 
 async def get_latest_share_post_id():
     row = await db_pool.execute_read(
@@ -724,7 +756,7 @@ async def grant_share_quota(uid, post_id, today=None):
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT quota, quota_date FROM users WHERE user_id=?",
+                "SELECT quota, quota_date, admin_quota FROM users WHERE user_id=?",
                 (uid,),
             )
             user_row = cursor.fetchone()
@@ -733,13 +765,20 @@ async def grant_share_quota(uid, post_id, today=None):
 
             current_quota = max(0, int(user_row[0] or 0))
             quota_date = user_row[1]
+            admin_quota = (
+                max(0, int(user_row[2] or 0)) if quota_date == today else 0
+            )
             cursor.execute(
                 "SELECT 1 FROM share_quota_rewards "
                 "WHERE user_id=? AND post_id=? AND reward_date=?",
                 (uid, post_id, today),
             )
             if cursor.fetchone():
-                return "duplicate", current_quota if quota_date == today else 0, DAILY_QUOTA
+                return (
+                    "duplicate",
+                    current_quota if quota_date == today else 0,
+                    DAILY_QUOTA + admin_quota,
+                )
 
             cursor.execute(
                 "SELECT COUNT(*) FROM share_quota_rewards "
@@ -749,7 +788,7 @@ async def grant_share_quota(uid, post_id, today=None):
             bonus_count = int(cursor.fetchone()[0] or 0)
             if bonus_count >= MAX_SHARE_BONUSES_PER_DAY:
                 return "daily_limit", current_quota if quota_date == today else 0, (
-                    DAILY_QUOTA + bonus_count
+                    DAILY_QUOTA + bonus_count + admin_quota
                 )
 
             cursor.execute(
@@ -759,11 +798,16 @@ async def grant_share_quota(uid, post_id, today=None):
             )
             remaining = current_quota + 1 if quota_date == today else DAILY_QUOTA + 1
             cursor.execute(
-                "UPDATE users SET quota=?, quota_date=? WHERE user_id=?",
-                (remaining, today, uid),
+                "UPDATE users SET quota=?, quota_date=?, admin_quota=? "
+                "WHERE user_id=?",
+                (remaining, today, admin_quota, uid),
             )
             conn.commit()
-            return "success", remaining, DAILY_QUOTA + bonus_count + 1
+            return (
+                "success",
+                remaining,
+                DAILY_QUOTA + bonus_count + 1 + admin_quota,
+            )
         except Exception:
             conn.rollback()
             raise
@@ -773,12 +817,48 @@ async def grant_share_quota(uid, post_id, today=None):
 async def refund_daily_quota(uid, today):
     try:
         await db_pool.execute_write(
-            "UPDATE users SET quota=MIN(?, quota+1) "
+            "UPDATE users SET quota=MIN(? + admin_quota, quota+1) "
             "WHERE user_id=? AND quota_date=?",
             (DAILY_QUOTA + MAX_SHARE_BONUSES_PER_DAY, uid, today)
         )
     except Exception as e:
         logger.error(f"Error refunding daily quota for {uid}: {e}")
+
+async def grant_admin_quota(uid, amount, today=None):
+    today = today or datetime.now(WIB).date().isoformat()
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT quota, quota_date, admin_quota FROM users WHERE user_id=?",
+                (uid,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            if row[1] == today:
+                remaining = max(0, int(row[0] or 0))
+                admin_quota = max(0, int(row[2] or 0))
+            else:
+                remaining = DAILY_QUOTA
+                admin_quota = 0
+
+            remaining += amount
+            admin_quota += amount
+            cursor.execute(
+                "UPDATE users SET quota=?, quota_date=?, admin_quota=? "
+                "WHERE user_id=?",
+                (remaining, today, admin_quota, uid),
+            )
+            conn.commit()
+            return remaining, admin_quota
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
 
 async def save_media(code, file_id, media_type, caption=""):
     try:
@@ -951,6 +1031,47 @@ async def claim_quota_command(update, context):
         reply_markup=command_keyboard(language)
     )
 
+async def add_quota_command(update, context):
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Admin only")
+        return
+
+    language = await get_user_language(user.id) or "id"
+    if len(context.args) != 1:
+        await update.message.reply_text(tr(language, "admin_quota_usage"))
+        return
+
+    try:
+        amount = int(context.args[0])
+    except (TypeError, ValueError):
+        amount = 0
+
+    if not 1 <= amount <= MAX_ADMIN_QUOTA_PER_COMMAND:
+        await update.message.reply_text(tr(language, "admin_quota_usage"))
+        return
+
+    await save_user(user.id, user.username or "unknown")
+    today = datetime.now(WIB).date().isoformat()
+    grant = await grant_admin_quota(user.id, amount, today)
+    if not grant:
+        await update.message.reply_text(tr(language, "admin_quota_error"))
+        return
+
+    remaining, admin_quota = grant
+    share_bonus_count = await get_share_bonus_count(user.id, today)
+    total = DAILY_QUOTA + share_bonus_count + admin_quota
+    await update.message.reply_text(
+        tr(
+            language,
+            "admin_quota_added",
+            amount=amount,
+            remaining=remaining,
+            total=total,
+        ),
+        parse_mode="HTML",
+    )
+
 async def menu_text_handler(update, context):
     """Route persistent keyboard buttons and language choices."""
     user = update.effective_user
@@ -1090,10 +1211,11 @@ async def start_command(update, context):
             message = tr(language, "quota_unclaimed")
         else:
             bonus_count = await get_share_bonus_count(uid, quota_date)
+            admin_quota = await get_admin_quota_count(uid, quota_date)
             message = tr(
                 language,
                 "quota_empty",
-                total=DAILY_QUOTA + bonus_count,
+                total=DAILY_QUOTA + bonus_count + admin_quota,
                 max_bonus=MAX_SHARE_BONUSES_PER_DAY,
                 channel=CHANNEL,
             )
@@ -1270,7 +1392,8 @@ async def build_profile_message(user):
     today = datetime.now(WIB).date().isoformat()
     remaining, claimed_today = await get_daily_quota(uid, today)
     bonus_count = await get_share_bonus_count(uid, today)
-    total_quota = DAILY_QUOTA + bonus_count
+    admin_quota = await get_admin_quota_count(uid, today)
+    total_quota = DAILY_QUOTA + bonus_count + admin_quota
     total_files = await db_pool.execute_read(
         """
         SELECT COUNT(m.id)
@@ -2622,6 +2745,7 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("quota", profile_command))
         application.add_handler(CommandHandler("claim", claim_quota_command))
+        application.add_handler(CommandHandler("add_quota", add_quota_command))
         application.add_handler(
             CommandHandler("set_share_post", set_share_post_command)
         )
