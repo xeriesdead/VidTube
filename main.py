@@ -1160,11 +1160,13 @@ async def start_command(update, context):
                     keyboard = InlineKeyboardMarkup([[
                         InlineKeyboardButton(
                             tr(notification_language, "take_again"),
-                            url=f"https://t.me/{BOT_USERNAME}?start={code}"
+                            url=f"https://t.me/{BOT_USERNAME}?start={code}",
+                            api_kwargs={"style": "success"},
                         ),
                         InlineKeyboardButton(
                             tr(notification_language, "close"),
-                            callback_data=f"expired_close:{uid}"
+                            callback_data=f"expired_close:{uid}",
+                            api_kwargs={"style": "danger"},
                         )
                     ]])
                     await context.bot.send_message(
