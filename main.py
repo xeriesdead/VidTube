@@ -130,6 +130,7 @@ DAILY_QUOTA = 3
 MAX_SHARE_BONUSES_PER_DAY = 10
 MAX_ADMIN_QUOTA_PER_COMMAND = 1000
 _daily_quota_notice_task = None
+_reaction_claim_notification_lock = asyncio.Lock()
 
 BOT_TEXT = {
     "id": {
@@ -165,10 +166,10 @@ BOT_TEXT = {
             "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
             "Kamu sudah menggunakan semua {total} kuota hari ini. "
             "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
-            "Reaction pada postingan {channel} memberi +1 kuota permanen sekali "
-            "per akun per postingan. Menghapus atau mengganti reaction tidak "
-            "mengurangi kuota yang sudah didapat. Bonus dari meneruskan postingan "
-            "ke bot tetap tersedia, maksimal {max_bonus} per akun per hari."
+            "Reaction pada postingan {channel} yang diteruskan ke grup diskusi "
+            "akan mengirim tombol klaim +1 permanen lewat DM. Bonus masuk setelah "
+            "diklaim, satu kali per akun per postingan. Bonus forward tetap "
+            "tersedia, maksimal {max_bonus} per akun per hari."
         ),
         "share_post_button": "📢 Buka Channel VidTube",
         "share_bonus_success": (
@@ -209,6 +210,23 @@ BOT_TEXT = {
             "Kuota tersisa: <b>{remaining}/{total}</b>"
         ),
         "claim_notification_already": "Kuota hari ini sudah diklaim.",
+        "reaction_claim_notification": (
+            "🎉 Reaction pada postingan VidTube terdeteksi.\n\n"
+            "Tekan tombol di bawah untuk mengklaim +1 kuota permanen. "
+            "Bonus masuk ke saldo setelah diklaim."
+        ),
+        "reaction_claim_pending": (
+            "🎉 Ada {count} bonus reaction +1 yang menunggu klaim.\n\n"
+            "Tekan tombol untuk menyimpan setiap bonus ke saldo permanen."
+        ),
+        "reaction_claim_button": "🎁 Klaim +1 · #{post_id}",
+        "reaction_claim_success": "✅ Bonus +1 permanen sudah masuk ke saldo.",
+        "reaction_claim_done": (
+            "✅ <b>Bonus reaction berhasil diklaim.</b>\n"
+            "Saldo bonus reaction: <b>{balance}</b>"
+        ),
+        "reaction_claim_already": "Bonus reaction ini sudah diklaim.",
+        "reaction_claim_invalid": "Klaim reaction ini tidak valid atau bukan milik akun Anda.",
         "profile_title": "👤 <b>ACCOUNT</b>",
         "profile_identity": "<b>IDENTITAS AKUN</b>",
         "profile_status": "<b>STATUS KUOTA</b>",
@@ -267,10 +285,10 @@ BOT_TEXT = {
             "⛔ <b>Daily Quota Used</b>\n\n"
             "You have used all {total} quotas today. Your next quota is available "
             "after 00:00 WIB.\n\n"
-            "A reaction to a {channel} post gives +1 permanent quota once per "
-            "account per post. Removing or changing the reaction will not revoke "
-            "earned quota. Forwarding posts to the bot still gives a separate "
-            "bonus, up to {max_bonus} per account per day."
+            "React to a forwarded {channel} post in its discussion group to get "
+            "a DM with a +1 permanent quota claim button. The bonus is saved "
+            "after you claim it, once per account per post. Forward bonuses "
+            "remain available, up to {max_bonus} per account per day."
         ),
         "share_post_button": "📢 Open VidTube Channel",
         "share_bonus_success": (
@@ -311,6 +329,23 @@ BOT_TEXT = {
             "Remaining quota: <b>{remaining}/{total}</b>"
         ),
         "claim_notification_already": "Today's quota has already been claimed.",
+        "reaction_claim_notification": (
+            "🎉 Your reaction to a VidTube post was detected.\n\n"
+            "Press the button below to claim +1 permanent quota. "
+            "The bonus is added to your balance after you claim it."
+        ),
+        "reaction_claim_pending": (
+            "🎉 You have {count} reaction bonus(es) waiting to be claimed.\n\n"
+            "Press a button to save each bonus to your permanent balance."
+        ),
+        "reaction_claim_button": "🎁 Claim +1 · #{post_id}",
+        "reaction_claim_success": "✅ +1 permanent quota was added to your balance.",
+        "reaction_claim_done": (
+            "✅ <b>Reaction bonus claimed.</b>\n"
+            "Saved reaction quota: <b>{balance}</b>"
+        ),
+        "reaction_claim_already": "This reaction bonus has already been claimed.",
+        "reaction_claim_invalid": "This reaction claim is invalid or does not belong to your account.",
         "profile_title": "👤 <b>ACCOUNT</b>",
         "profile_identity": "<b>ACCOUNT DETAILS</b>",
         "profile_status": "<b>QUOTA STATUS</b>",
@@ -459,6 +494,31 @@ async def init_db():
                 PRIMARY KEY(user_id, channel_id, post_id)
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS discussion_post_map(
+                discussion_chat_id INTEGER NOT NULL,
+                discussion_message_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                post_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(discussion_chat_id, discussion_message_id)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS reaction_quota_claims(
+                user_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                post_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                notified_at TIMESTAMP,
+                claimed_at TIMESTAMP,
+                PRIMARY KEY(user_id, channel_id, post_id)
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reaction_claims_pending "
+            "ON reaction_quota_claims(user_id, channel_id, claimed_at, notified_at)"
+        )
         reward_columns = c.execute(
             "PRAGMA table_info(share_quota_rewards)"
         ).fetchall()
@@ -856,20 +916,133 @@ async def grant_share_quota(uid, post_id, today=None):
         finally:
             await db_pool.put(conn)
 
-async def grant_reaction_quota(uid, post_id):
-    """Save one permanent quota for a user's first reaction to a channel post."""
+async def save_discussion_post_mapping(message):
+    """Map a Telegram discussion mirror message to its original channel post."""
+    if not isinstance(message, dict) or not message.get("is_automatic_forward"):
+        return False
+
+    discussion_chat = message.get("chat")
+    origin = message.get("forward_origin")
+    if not isinstance(discussion_chat, dict) or not isinstance(origin, dict):
+        return False
+    if origin.get("type") != "channel":
+        return False
+
+    source_chat = origin.get("chat")
+    if not isinstance(source_chat, dict):
+        return False
+    try:
+        discussion_chat_id = int(discussion_chat.get("id", 0))
+        discussion_message_id = int(message.get("message_id", 0))
+        channel_id = int(source_chat.get("id", 0))
+        post_id = int(origin.get("message_id", 0))
+    except (TypeError, ValueError):
+        return False
+
+    if (
+        discussion_chat.get("type") not in ("group", "supergroup")
+        or channel_id != CHANNEL_ID
+        or discussion_chat_id >= 0
+        or discussion_message_id <= 0
+        or post_id <= 0
+    ):
+        return False
+
+    await db_pool.execute_write(
+        """
+        INSERT INTO discussion_post_map
+            (discussion_chat_id, discussion_message_id, channel_id, post_id)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(discussion_chat_id, discussion_message_id) DO UPDATE SET
+            channel_id=excluded.channel_id,
+            post_id=excluded.post_id
+        """,
+        (discussion_chat_id, discussion_message_id, channel_id, post_id),
+    )
+    return True
+
+
+async def queue_reaction_quota_claim(uid, post_id):
+    """Create a durable, one-per-user/post pending quota claim."""
     async with db_pool.write_lock:
         conn = await db_pool.get()
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT OR IGNORE INTO reaction_quota_rewards "
+                "INSERT OR IGNORE INTO reaction_quota_claims "
                 "(user_id, channel_id, post_id) VALUES (?, ?, ?)",
                 (uid, CHANNEL_ID, post_id),
             )
-            if cursor.rowcount != 1:
+            inserted = cursor.rowcount == 1
+            cursor.execute(
+                """
+                SELECT notified_at, claimed_at
+                FROM reaction_quota_claims
+                WHERE user_id=? AND channel_id=? AND post_id=?
+                """,
+                (uid, CHANNEL_ID, post_id),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            return (
+                inserted,
+                bool(row[0]) if row else False,
+                bool(row[1]) if row else False,
+            )
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
+
+async def claim_reaction_quota(uid, post_id):
+    """Atomically convert one pending claim into a permanent quota credit."""
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT claimed_at FROM reaction_quota_claims
+                WHERE user_id=? AND channel_id=? AND post_id=?
+                """,
+                (uid, CHANNEL_ID, post_id),
+            )
+            claim_row = cursor.fetchone()
+            if not claim_row:
                 conn.rollback()
-                return "duplicate", 0
+                return "invalid", 0
+
+            cursor.execute(
+                "SELECT reaction_quota FROM users WHERE user_id=?",
+                (uid,),
+            )
+            user_row = cursor.fetchone()
+            balance = max(0, int(user_row[0] or 0)) if user_row else 0
+            if claim_row[0]:
+                conn.rollback()
+                return "already", balance
+
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO reaction_quota_rewards
+                    (user_id, channel_id, post_id)
+                VALUES (?, ?, ?)
+                """,
+                (uid, CHANNEL_ID, post_id),
+            )
+            if cursor.rowcount != 1:
+                cursor.execute(
+                    """
+                    UPDATE reaction_quota_claims
+                    SET claimed_at=CURRENT_TIMESTAMP
+                    WHERE user_id=? AND channel_id=? AND post_id=?
+                      AND claimed_at IS NULL
+                    """,
+                    (uid, CHANNEL_ID, post_id),
+                )
+                conn.commit()
+                return "already", balance
 
             cursor.execute(
                 "UPDATE users SET reaction_quota=reaction_quota+1 "
@@ -878,22 +1051,104 @@ async def grant_reaction_quota(uid, post_id):
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(
-                    f"User {uid} missing while granting reaction quota"
+                    f"User {uid} missing while claiming reaction quota"
                 )
+            cursor.execute(
+                """
+                UPDATE reaction_quota_claims
+                SET claimed_at=CURRENT_TIMESTAMP,
+                    notified_at=COALESCE(notified_at, CURRENT_TIMESTAMP)
+                WHERE user_id=? AND channel_id=? AND post_id=?
+                  AND claimed_at IS NULL
+                """,
+                (uid, CHANNEL_ID, post_id),
+            )
             cursor.execute(
                 "SELECT reaction_quota FROM users WHERE user_id=?",
                 (uid,),
             )
-            row = cursor.fetchone()
+            user_row = cursor.fetchone()
+            balance = max(0, int(user_row[0] or 0)) if user_row else 0
             conn.commit()
-            return "success", max(0, int(row[0] or 0)) if row else 0
+            return "success", balance
         except Exception:
             conn.rollback()
             raise
         finally:
             await db_pool.put(conn)
 
-async def handle_channel_reaction(reaction_update):
+
+async def send_pending_reaction_claims(bot, uid):
+    """Send pending reward buttons only in the user's private chat."""
+    async with _reaction_claim_notification_lock:
+        rows = await db_pool.execute_read(
+            """
+            SELECT post_id FROM reaction_quota_claims
+            WHERE user_id=? AND channel_id=?
+              AND claimed_at IS NULL AND notified_at IS NULL
+            ORDER BY created_at, post_id
+            """,
+            (uid, CHANNEL_ID),
+        )
+        post_ids = [int(row[0]) for row in rows or []]
+        if not post_ids:
+            return 0
+
+        language = await get_user_language(uid) or "id"
+        sent_count = 0
+        for offset in range(0, len(post_ids), 10):
+            batch = post_ids[offset:offset + 10]
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    tr(language, "reaction_claim_button", post_id=post_id),
+                    callback_data=f"reaction_claim:{post_id}",
+                )]
+                for post_id in batch
+            ])
+            notification_text = (
+                tr(language, "reaction_claim_notification")
+                if len(batch) == 1
+                else tr(
+                    language,
+                    "reaction_claim_pending",
+                    count=len(batch),
+                )
+            )
+            try:
+                await bot.send_message(
+                    chat_id=uid,
+                    text=notification_text,
+                    reply_markup=keyboard,
+                )
+            except Forbidden:
+                logger.info(
+                    "Reaction claim DM deferred until user starts bot: user=%s",
+                    uid,
+                )
+                return sent_count
+            except Exception as e:
+                logger.warning(
+                    "Could not send reaction claim DM to user=%s: %s",
+                    uid,
+                    e,
+                )
+                raise
+
+            for post_id in batch:
+                await db_pool.execute_write(
+                    """
+                    UPDATE reaction_quota_claims
+                    SET notified_at=CURRENT_TIMESTAMP
+                    WHERE user_id=? AND channel_id=? AND post_id=?
+                      AND claimed_at IS NULL AND notified_at IS NULL
+                    """,
+                    (uid, CHANNEL_ID, post_id),
+                )
+            sent_count += len(batch)
+        return sent_count
+
+
+async def handle_discussion_reaction(reaction_update, bot):
     if not isinstance(reaction_update, dict):
         return
     chat = reaction_update.get("chat")
@@ -901,33 +1156,54 @@ async def handle_channel_reaction(reaction_update):
     reactions = reaction_update.get("new_reaction")
     if not isinstance(chat, dict) or not isinstance(user, dict):
         return
+    if chat.get("type") not in ("group", "supergroup"):
+        return
     if not isinstance(reactions, list) or not reactions:
         return
 
     try:
-        source_chat_id = int(chat.get("id", 0))
-        post_id = int(reaction_update.get("message_id", 0))
+        discussion_chat_id = int(chat.get("id", 0))
+        discussion_message_id = int(reaction_update.get("message_id", 0))
         user_id = int(user.get("id", 0))
     except (TypeError, ValueError):
         return
 
     if (
-        source_chat_id != CHANNEL_ID
-        or post_id <= 0
+        discussion_chat_id >= 0
+        or discussion_message_id <= 0
         or user_id <= 0
         or user.get("is_bot", False)
     ):
         return
 
+    mapping = await db_pool.execute_read(
+        """
+        SELECT post_id FROM discussion_post_map
+        WHERE discussion_chat_id=? AND discussion_message_id=?
+          AND channel_id=?
+        """,
+        (discussion_chat_id, discussion_message_id, CHANNEL_ID),
+        fetch_one=True,
+    )
+    if not mapping:
+        return
+    post_id = int(mapping[0])
+
     await save_user(user_id, user.get("username") or "unknown")
-    status, balance = await grant_reaction_quota(user_id, post_id)
-    if status == "success":
+    inserted, notified, claimed = await queue_reaction_quota_claim(
+        user_id,
+        post_id,
+    )
+    if claimed or notified:
+        return
+
+    if inserted:
         logger.info(
-            "Permanent reaction quota added for user=%s post=%s balance=%s",
+            "Reaction quota claim queued for user=%s post=%s",
             user_id,
             post_id,
-            balance,
         )
+    await send_pending_reaction_claims(bot, user_id)
 
 async def refund_daily_quota(uid, today, quota_source="daily"):
     try:
@@ -1272,6 +1548,15 @@ async def start_command(update, context):
     username = update.effective_user.username or "unknown"
 
     await save_user(uid, username)
+    if update.effective_chat and update.effective_chat.type == "private":
+        try:
+            await send_pending_reaction_claims(context.bot, uid)
+        except Exception as e:
+            logger.warning(
+                "Could not deliver pending reaction claims after /start for user=%s: %s",
+                uid,
+                e,
+            )
     language = await get_user_language(uid) or "id"
     logger.info(f"👤 User {username} ({uid}) started bot")
 
@@ -1459,7 +1744,8 @@ async def set_share_post_command(update, context):
 
 async def handle_share_forward(update, context):
     message = update.message
-    if not message:
+    user = update.effective_user
+    if not message or not user:
         return
 
     forwarded_post = get_forwarded_channel_post(message)
@@ -1467,7 +1753,6 @@ async def handle_share_forward(update, context):
         return
 
     source_chat_id, post_id = forwarded_post
-    user = update.effective_user
     language = await get_user_language(user.id) or "id"
 
     if source_chat_id != CHANNEL_ID:
@@ -1625,6 +1910,66 @@ async def claim_quota_callback(update, context):
             )
         except Exception as e:
             logger.debug(f"Could not update quota claim message: {e}")
+
+
+async def reaction_quota_claim_callback(update, context):
+    query = update.callback_query
+    user_id = query.from_user.id
+    language = await get_user_language(user_id) or "id"
+    try:
+        prefix, post_id_text = query.data.split(":", 1)
+        post_id = int(post_id_text)
+        if prefix != "reaction_claim" or post_id <= 0:
+            raise ValueError("invalid claim payload")
+    except (AttributeError, TypeError, ValueError):
+        await query.answer(
+            tr(language, "reaction_claim_invalid"),
+            show_alert=True,
+        )
+        return
+
+    status, balance = await claim_reaction_quota(user_id, post_id)
+    if status == "invalid":
+        await query.answer(
+            tr(language, "reaction_claim_invalid"),
+            show_alert=True,
+        )
+        return
+    if status == "already":
+        await query.answer(
+            tr(language, "reaction_claim_already"),
+            show_alert=True,
+        )
+    else:
+        await query.answer(tr(language, "reaction_claim_success"))
+
+    if not query.message:
+        return
+
+    current_markup = query.message.reply_markup
+    remaining_rows = []
+    if current_markup:
+        for row in current_markup.inline_keyboard:
+            remaining = [
+                button for button in row
+                if button.callback_data != query.data
+            ]
+            if remaining:
+                remaining_rows.append(remaining)
+
+    try:
+        if remaining_rows:
+            await query.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(remaining_rows)
+            )
+        else:
+            await query.message.edit_text(
+                tr(language, "reaction_claim_done", balance=balance),
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.debug(f"Could not update reaction claim message: {e}")
+
 
 async def close_expired_notification(update, context):
     query = update.callback_query
@@ -2859,6 +3204,10 @@ async def lifespan(fastapi_app: FastAPI):
             group=-1,
         )
         application.add_handler(CallbackQueryHandler(
+            reaction_quota_claim_callback,
+            pattern=r"^reaction_claim:\d+$"
+        ))
+        application.add_handler(CallbackQueryHandler(
             close_expired_notification,
             pattern=r"^expired_close:\d+$"
         ))
@@ -3009,6 +3358,9 @@ async def telegram_webhook(request: Request):
     """Endpoint yang dipanggil Telegram setiap ada update baru."""
     try:
         data = await request.json()
+        message = data.get("message")
+        if message:
+            await save_discussion_post_mapping(message)
         channel_post = data.get("channel_post")
         if channel_post:
             channel_chat = channel_post.get("chat", {})
@@ -3020,7 +3372,10 @@ async def telegram_webhook(request: Request):
         if "message_reaction" in data:
             # PTB 20.7 does not model message_reaction updates. Process the raw
             # webhook payload and keep it out of Update.de_json().
-            await handle_channel_reaction(data.get("message_reaction"))
+            await handle_discussion_reaction(
+                data.get("message_reaction"),
+                application.bot,
+            )
             return Response(content="ok", status_code=200)
         update = Update.de_json(data, application.bot)
         await application.process_update(update)

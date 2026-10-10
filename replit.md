@@ -37,11 +37,18 @@ Deployed automatically via GitHub push. Railway sets `RAILWAY_PUBLIC_DOMAIN` whi
 
 ### Permanent reaction quota
 
-- The bot must be an administrator in the VidTube channel to receive Telegram
-  `message_reaction` updates.
-- The first reaction by a user on a post adds one permanent quota. Each
-  user/channel-post pair is credited once; removing or changing the reaction
-  does not revoke or duplicate the credit.
+- The bot must be an administrator in VidTube's linked discussion group to
+  receive user-specific Telegram `message_reaction` updates.
+- Only reactions on the automatic-forward copy of a VidTube channel post in the
+  linked discussion group are eligible. Reactions on ordinary comments are not.
+- The bot must receive the automatic-forward message to map it to its channel
+  post, so test with a post mirrored after the bot is added as a group admin.
+- A qualifying reaction creates a pending private claim. The user must press the
+  inline button in the bot's DM to add one permanent quota, once per
+  user/channel-post pair.
+- If Telegram will not let the bot DM the user because they have not started
+  the bot, the claim stays pending and is sent after they use `/start`. The bot
+  does not post quota notifications in the discussion group.
 - Saved reaction quotas are used after the user's current daily quota runs out.
   Existing forwarded-post bonuses remain available and keep their daily limit.
 
