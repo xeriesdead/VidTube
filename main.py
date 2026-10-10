@@ -16,6 +16,9 @@ import gzip
 import sqlite3
 import random
 import string
+import secrets
+import hashlib
+import hmac
 import shutil
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -27,12 +30,12 @@ from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButton,
-    ReplyKeyboardMarkup, BotCommand
+    ReplyKeyboardMarkup, BotCommand, LabeledPrice
 )
 from telegram.error import RetryAfter, Forbidden, BadRequest
 from telegram.ext import (
     Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler,
-    MessageHandler, filters
+    MessageHandler, PreCheckoutQueryHandler, filters
 )
 
 from config import (
@@ -58,6 +61,14 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Derive the Telegram webhook secret from the existing bot token so Railway
+# does not need another secret configured.
+WEBHOOK_SECRET = hmac.new(
+    TOKEN.encode("utf-8"),
+    b"vidtube-telegram-webhook",
+    hashlib.sha256,
+).hexdigest()
 
 # ===== DATABASE CONNECTION POOL =====
 
@@ -127,6 +138,7 @@ class DatabasePool:
 db_pool: Optional[DatabasePool] = None
 WIB = timezone(timedelta(hours=7))
 DAILY_QUOTA = 3
+TELEGRAM_STARS_PER_QUOTA = 1
 MAX_SHARE_BONUSES_PER_DAY = 10
 MAX_ADMIN_QUOTA_PER_COMMAND = 1000
 _daily_quota_notice_task = None
@@ -138,6 +150,7 @@ BOT_TEXT = {
         "language_saved": "✅ Bahasa diatur ke Bahasa Indonesia.",
         "profile_button": "👤 Profil",
         "claim_button": "🎁 Klaim Kuota",
+        "buy_quota_button": "⭐ Beli +1 Kuota (1 Star)",
         "language_button": "🌐 Bahasa",
         "help_button": "ℹ️ Bantuan",
         "menu_placeholder": "Pilih menu bot",
@@ -152,6 +165,8 @@ BOT_TEXT = {
             "• Buka media melalui link dari admin.\n"
             "• Gunakan <b>Profil</b> untuk melihat kuota.\n"
             "• Tekan <b>Klaim Kuota</b> untuk mengambil 3 kuota harian.\n"
+            "• Beli <b>+1 kuota permanen</b> seharga 1 ⭐ dengan /buy_quota.\n"
+            "• Gunakan /terms untuk ketentuan dan /paysupport untuk bantuan pembayaran.\n"
             "• Gunakan <b>Bahasa</b> untuk mengganti bahasa."
         ),
         "join_required": "⚠️ Wajib bergabung ke channel {channel} untuk mengakses media.",
@@ -169,7 +184,37 @@ BOT_TEXT = {
             "Komentar/reply pada postingan {channel} yang diteruskan ke grup "
             "diskusi akan mengirim tombol klaim +1 permanen lewat DM. Bonus masuk "
             "setelah diklaim, satu kali per akun per postingan. Bonus forward tetap "
-            "tersedia, maksimal {max_bonus} per akun per hari."
+            "tersedia, maksimal {max_bonus} per akun per hari.\n\n"
+            "Beli +1 kuota permanen seharga 1 ⭐ lewat /buy_quota."
+        ),
+        "buy_quota_invoice_title": "Kuota Permanen +1",
+        "buy_quota_invoice_description": (
+            "Tambahkan 1 kuota permanen. Saldo ini digunakan setelah kuota harian habis."
+        ),
+        "buy_quota_invoice_label": "+1 kuota permanen",
+        "buy_quota_invoice_failed": "Invoice belum bisa dibuat. Coba lagi nanti.",
+        "buy_quota_checkout_invalid": "Invoice tidak valid atau sudah tidak tersedia. Buat invoice baru dengan /buy_quota.",
+        "buy_quota_paid": (
+            "✅ Pembayaran diterima. +1 kuota permanen sudah ditambahkan.\n"
+            "Saldo kuota permanen: <b>{balance}</b>"
+        ),
+        "buy_quota_payment_review": (
+            "Pembayaran diterima, tetapi kuota belum dapat diverifikasi otomatis. "
+            "Jangan bayar lagi; gunakan /paysupport agar admin memeriksanya."
+        ),
+        "payment_support_sent": (
+            "✅ Permintaan bantuan pembayaran sudah diteruskan ke admin. "
+            "Jangan kirim pembayaran ulang selama pemeriksaan."
+        ),
+        "payment_support_failed": (
+            "Admin belum dapat dihubungi otomatis. Kirim /paysupport beserta detail "
+            "pembayaran lagi nanti."
+        ),
+        "payment_terms": (
+            "<b>Ketentuan pembelian kuota</b>\n\n"
+            "Setiap pembayaran berhasil sebesar 1 Telegram Star menambahkan 1 kuota "
+            "permanen ke akun Anda. Kuota permanen digunakan setelah kuota harian habis. "
+            "Untuk masalah pembayaran, gunakan /paysupport."
         ),
         "share_post_button": "📢 Buka Channel VidTube",
         "share_bonus_success": (
@@ -234,7 +279,7 @@ BOT_TEXT = {
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
         "profile_remaining": "├ TERSISA",
-        "profile_reaction_quota": "├ BONUS KOMENTAR TERSIMPAN",
+        "profile_reaction_quota": "├ SALDO KUOTA PERMANEN",
         "profile_used": "├ TERPAKAI HARI INI",
         "profile_claim_status": "└ STATUS",
         "profile_claimed": "Aktif",
@@ -257,6 +302,7 @@ BOT_TEXT = {
         "language_saved": "✅ Language set to English.",
         "profile_button": "👤 Profile",
         "claim_button": "🎁 Claim Quota",
+        "buy_quota_button": "⭐ Buy +1 Quota (1 Star)",
         "language_button": "🌐 Language",
         "help_button": "ℹ️ Help",
         "menu_placeholder": "Choose a bot menu",
@@ -271,6 +317,8 @@ BOT_TEXT = {
             "• Open media using a link shared by the admin.\n"
             "• Use <b>Profile</b> to check your quota.\n"
             "• Press <b>Claim Quota</b> to claim 3 daily quotas.\n"
+            "• Buy <b>+1 permanent quota</b> for 1 ⭐ with /buy_quota.\n"
+            "• Use /terms for purchase terms and /paysupport for payment help.\n"
             "• Use <b>Language</b> to change the bot language."
         ),
         "join_required": "⚠️ Join channel {channel} to access this media.",
@@ -288,7 +336,37 @@ BOT_TEXT = {
             "Comment or reply to the auto-forwarded {channel} post in its "
             "discussion group to get a DM with a +1 permanent quota claim button. "
             "The bonus is saved after you claim it, once per account per post. Forward bonuses "
-            "remain available, up to {max_bonus} per account per day."
+            "remain available, up to {max_bonus} per account per day.\n\n"
+            "Buy +1 permanent quota for 1 ⭐ with /buy_quota."
+        ),
+        "buy_quota_invoice_title": "Permanent Quota +1",
+        "buy_quota_invoice_description": (
+            "Add 1 permanent quota. It is used after your daily quota runs out."
+        ),
+        "buy_quota_invoice_label": "+1 permanent quota",
+        "buy_quota_invoice_failed": "Could not create the invoice. Please try again later.",
+        "buy_quota_checkout_invalid": "This invoice is invalid or unavailable. Create a new one with /buy_quota.",
+        "buy_quota_paid": (
+            "✅ Payment received. +1 permanent quota has been added.\n"
+            "Permanent quota balance: <b>{balance}</b>"
+        ),
+        "buy_quota_payment_review": (
+            "Payment received, but the quota could not be verified automatically. "
+            "Do not pay again; use /paysupport so an admin can review it."
+        ),
+        "payment_support_sent": (
+            "✅ Your payment support request was sent to the admin. "
+            "Please do not submit another payment while it is being reviewed."
+        ),
+        "payment_support_failed": (
+            "The admin could not be notified automatically. Please try /paysupport "
+            "with your payment details again later."
+        ),
+        "payment_terms": (
+            "<b>Quota purchase terms</b>\n\n"
+            "Each successful payment of 1 Telegram Star adds 1 permanent quota to your "
+            "account. Permanent quotas are used after your daily quota runs out. "
+            "For payment issues, use /paysupport."
         ),
         "share_post_button": "📢 Open VidTube Channel",
         "share_bonus_success": (
@@ -353,7 +431,7 @@ BOT_TEXT = {
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
         "profile_remaining": "├ REMAINING",
-        "profile_reaction_quota": "├ SAVED COMMENT BONUS",
+        "profile_reaction_quota": "├ PERMANENT QUOTA BALANCE",
         "profile_used": "├ USED TODAY",
         "profile_claim_status": "└ STATUS",
         "profile_claimed": "Claimed",
@@ -389,6 +467,7 @@ def command_keyboard(language):
         [
             [KeyboardButton(text["profile_button"]), KeyboardButton(text["claim_button"])],
             [KeyboardButton(text["language_button"]), KeyboardButton(text["help_button"])],
+            [KeyboardButton(text["buy_quota_button"])],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -467,6 +546,24 @@ async def init_db():
                 reaction_quota INTEGER NOT NULL DEFAULT 0
             )
         """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS star_quota_payments(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_payload TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                total_amount INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'paid')),
+                telegram_payment_charge_id TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                paid_at TIMESTAMP
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_star_quota_invoice "
+            "ON star_quota_payments(invoice_payload, user_id, status)"
+        )
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS share_post_state(
@@ -703,6 +800,116 @@ async def get_reaction_quota(uid):
         fetch_one=True,
     )
     return max(0, int(row[0] or 0)) if row else 0
+
+async def create_star_quota_invoice(uid, payload):
+    await db_pool.execute_write(
+        """
+        INSERT INTO star_quota_payments
+            (invoice_payload, user_id, currency, total_amount, status)
+        VALUES (?, ?, 'XTR', ?, 'pending')
+        """,
+        (payload, uid, TELEGRAM_STARS_PER_QUOTA),
+    )
+
+async def validate_star_quota_invoice(uid, payload, amount, currency):
+    row = await db_pool.execute_read(
+        """
+        SELECT 1 FROM star_quota_payments
+        WHERE invoice_payload=? AND user_id=? AND total_amount=?
+          AND currency=? AND status='pending' AND telegram_payment_charge_id IS NULL
+        LIMIT 1
+        """,
+        (payload, uid, amount, currency),
+        fetch_one=True,
+    )
+    return bool(row)
+
+async def record_star_quota_payment(
+    uid, payload, charge_id, amount, currency
+):
+    """Credit one permanent quota once per successful Telegram Stars charge."""
+    if (
+        not payload
+        or not charge_id
+        or amount != TELEGRAM_STARS_PER_QUOTA
+        or currency != "XTR"
+    ):
+        return "invalid", None
+
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            existing_charge = cursor.execute(
+                """
+                SELECT invoice_payload, user_id, total_amount, currency
+                FROM star_quota_payments
+                WHERE telegram_payment_charge_id=?
+                """,
+                (charge_id,),
+            ).fetchone()
+            if existing_charge:
+                if (
+                    existing_charge[0] == payload
+                    and int(existing_charge[1]) == uid
+                    and int(existing_charge[2]) == amount
+                    and existing_charge[3] == currency
+                ):
+                    balance_row = cursor.execute(
+                        "SELECT reaction_quota FROM users WHERE user_id=?",
+                        (uid,),
+                    ).fetchone()
+                    return "already", max(0, int(balance_row[0] or 0)) if balance_row else 0
+                return "invalid", None
+
+            invoice = cursor.execute(
+                """
+                SELECT user_id, total_amount, currency
+                FROM star_quota_payments
+                WHERE invoice_payload=? AND user_id=? AND status='pending'
+                  AND telegram_payment_charge_id IS NULL
+                LIMIT 1
+                """,
+                (payload, uid),
+            ).fetchone()
+            if not invoice or (
+                int(invoice[0]) != uid
+                or int(invoice[1]) != amount
+                or invoice[2] != currency
+            ):
+                return "invalid", None
+
+            user_row = cursor.execute(
+                "SELECT reaction_quota FROM users WHERE user_id=?",
+                (uid,),
+            ).fetchone()
+            if not user_row:
+                return "user_missing", None
+
+            cursor.execute(
+                """
+                INSERT INTO star_quota_payments
+                    (invoice_payload, user_id, currency, total_amount, status,
+                     telegram_payment_charge_id, paid_at)
+                VALUES (?, ?, ?, ?, 'paid', ?, CURRENT_TIMESTAMP)
+                """,
+                (payload, uid, currency, amount, charge_id),
+            )
+            cursor.execute(
+                "UPDATE users SET reaction_quota=reaction_quota+1 WHERE user_id=?",
+                (uid,),
+            )
+            balance = cursor.execute(
+                "SELECT reaction_quota FROM users WHERE user_id=?",
+                (uid,),
+            ).fetchone()[0]
+            conn.commit()
+            return "success", max(0, int(balance or 0))
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
 
 async def claim_daily_quota(uid, today=None):
     today = today or datetime.now(WIB).date().isoformat()
@@ -1490,6 +1697,172 @@ async def claim_quota_command(update, context):
         reply_markup=command_keyboard(language)
     )
 
+async def send_star_quota_invoice(bot, user, language):
+    payload = f"permanent-quota:{user.id}:{secrets.token_urlsafe(18)}"
+    try:
+        await create_star_quota_invoice(user.id, payload)
+        await bot.send_invoice(
+            chat_id=user.id,
+            title=tr(language, "buy_quota_invoice_title"),
+            description=tr(language, "buy_quota_invoice_description"),
+            payload=payload,
+            provider_token="",
+            currency="XTR",
+            prices=[
+                LabeledPrice(
+                    tr(language, "buy_quota_invoice_label"),
+                    TELEGRAM_STARS_PER_QUOTA,
+                )
+            ],
+            start_parameter="buy_permanent_quota",
+        )
+        return True
+    except Exception:
+        logger.exception("Could not send Stars quota invoice for user=%s", user.id)
+        return False
+
+async def buy_quota_command(update, context):
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+    if not update.effective_chat or update.effective_chat.type != "private":
+        await update.effective_message.reply_text(
+            tr(language, "buy_quota_invoice_failed")
+        )
+        return
+
+    await save_user(user.id, user.username or "unknown")
+    sent = await send_star_quota_invoice(context.bot, user, language)
+    if not sent:
+        await update.effective_message.reply_text(
+            tr(language, "buy_quota_invoice_failed")
+        )
+
+async def buy_quota_callback(update, context):
+    query = update.callback_query
+    user = query.from_user
+    language = await get_user_language(user.id) or "id"
+    if not query.message or query.message.chat.type != "private":
+        await query.answer(
+            tr(language, "buy_quota_invoice_failed"),
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+    await save_user(user.id, user.username or "unknown")
+    sent = await send_star_quota_invoice(context.bot, user, language)
+    if not sent:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=tr(language, "buy_quota_invoice_failed"),
+        )
+
+async def pre_checkout_query_handler(update, context):
+    query = update.pre_checkout_query
+    user_id = query.from_user.id
+    try:
+        valid = (
+            query.currency == "XTR"
+            and query.total_amount == TELEGRAM_STARS_PER_QUOTA
+            and await validate_star_quota_invoice(
+                user_id,
+                query.invoice_payload,
+                query.total_amount,
+                query.currency,
+            )
+        )
+    except Exception:
+        logger.exception("Could not validate Stars pre-checkout for user=%s", user_id)
+        valid = False
+    if valid:
+        await query.answer(ok=True)
+    else:
+        language = await get_user_language(user_id) or "id"
+        await query.answer(
+            ok=False,
+            error_message=tr(language, "buy_quota_checkout_invalid"),
+        )
+
+async def successful_payment_handler(update, context):
+    user = update.effective_user
+    message = update.effective_message
+    payment = message.successful_payment if message else None
+    if not user or not payment:
+        return
+
+    language = await get_user_language(user.id) or "id"
+    await save_user(user.id, user.username or "unknown")
+    if payment.currency != "XTR" or payment.total_amount != TELEGRAM_STARS_PER_QUOTA:
+        logger.error(
+            "Unexpected Stars payment amount/currency for user=%s amount=%s currency=%s",
+            user.id,
+            payment.total_amount,
+            payment.currency,
+        )
+        await message.reply_text(tr(language, "buy_quota_payment_review"))
+        return
+
+    try:
+        status, balance = await record_star_quota_payment(
+            user.id,
+            payment.invoice_payload,
+            payment.telegram_payment_charge_id,
+            payment.total_amount,
+            payment.currency,
+        )
+    except Exception:
+        logger.exception("Could not record Stars payment for user=%s", user.id)
+        await message.reply_text(tr(language, "buy_quota_payment_review"))
+        return
+
+    if status in ("success", "already"):
+        await message.reply_text(
+            tr(language, "buy_quota_paid", balance=balance),
+            parse_mode="HTML",
+            reply_markup=command_keyboard(language),
+        )
+    else:
+        logger.error(
+            "Could not match a successful Stars payment to an invoice for user=%s",
+            user.id,
+        )
+        await message.reply_text(tr(language, "buy_quota_payment_review"))
+
+async def payment_support_command(update, context):
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+    details = " ".join(context.args).strip()[:500] or "No details provided."
+    username = f"@{user.username}" if user.username else "none"
+    support_message = (
+        "Telegram Stars payment support request\n"
+        f"User ID: {user.id}\n"
+        f"Username: {username}\n"
+        f"Details: {details}"
+    )
+
+    delivered = 0
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=support_message)
+            delivered += 1
+        except Exception as e:
+            logger.warning(
+                "Could not deliver payment support request to admin=%s: %s",
+                admin_id,
+                e,
+            )
+
+    response_key = "payment_support_sent" if delivered else "payment_support_failed"
+    await update.effective_message.reply_text(tr(language, response_key))
+
+async def terms_command(update, context):
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+    await update.effective_message.reply_text(
+        tr(language, "payment_terms"),
+        parse_mode="HTML",
+    )
+
 async def add_quota_command(update, context):
     user = update.effective_user
     if not is_admin(user.id):
@@ -1551,6 +1924,7 @@ async def menu_text_handler(update, context):
         for candidate, key in (
             ("profile", "profile_button"),
             ("claim", "claim_button"),
+            ("buy_quota", "buy_quota_button"),
             ("language", "language_button"),
             ("help", "help_button"),
         ):
@@ -1564,6 +1938,8 @@ async def menu_text_handler(update, context):
         await profile_command(update, context)
     elif action == "claim":
         await claim_quota_command(update, context)
+    elif action == "buy_quota":
+        await buy_quota_command(update, context)
     elif action == "language":
         await language_command(update, context)
     elif action == "help":
@@ -1581,6 +1957,9 @@ async def register_bot_commands(bot):
             BotCommand("profile", "Lihat profil dan kuota"),
             BotCommand("quota", "Lihat kuota harian"),
             BotCommand("claim", "Klaim kuota harian"),
+            BotCommand("buy_quota", "Beli +1 kuota permanen (1 Star)"),
+            BotCommand("terms", "Ketentuan pembelian kuota"),
+            BotCommand("paysupport", "Bantuan pembayaran Stars"),
             BotCommand("language", "Ganti bahasa"),
             BotCommand("menu", "Tampilkan menu"),
         ],
@@ -1589,6 +1968,9 @@ async def register_bot_commands(bot):
             BotCommand("profile", "View profile and quota"),
             BotCommand("quota", "View daily quota"),
             BotCommand("claim", "Claim daily quota"),
+            BotCommand("buy_quota", "Buy +1 permanent quota (1 Star)"),
+            BotCommand("terms", "Quota purchase terms"),
+            BotCommand("paysupport", "Telegram Stars payment help"),
             BotCommand("language", "Change language"),
             BotCommand("menu", "Show the menu"),
         ],
@@ -1908,6 +2290,10 @@ async def build_profile_message(user):
             tr(language, "claim_notification_button"),
             callback_data=f"claim_quota:{today}:{uid}"
         )])
+    keyboard_rows.append([InlineKeyboardButton(
+        tr(language, "buy_quota_button"),
+        callback_data="buy_quota",
+    )])
 
     reply_markup = InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
     return text, reply_markup
@@ -3276,9 +3662,20 @@ async def lifespan(fastapi_app: FastAPI):
             claim_quota_callback,
             pattern=r"^claim_quota:\d{4}-\d{2}-\d{2}:\d+$"
         ))
+        application.add_handler(CallbackQueryHandler(
+            buy_quota_callback,
+            pattern=r"^buy_quota$",
+        ))
+        application.add_handler(PreCheckoutQueryHandler(pre_checkout_query_handler))
+        application.add_handler(
+            MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler)
+        )
         application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("quota", profile_command))
         application.add_handler(CommandHandler("claim", claim_quota_command))
+        application.add_handler(CommandHandler("buy_quota", buy_quota_command))
+        application.add_handler(CommandHandler("terms", terms_command))
+        application.add_handler(CommandHandler("paysupport", payment_support_command))
         application.add_handler(CommandHandler("add_quota", add_quota_command))
         application.add_handler(
             CommandHandler("set_share_post", set_share_post_command)
@@ -3331,6 +3728,7 @@ async def lifespan(fastapi_app: FastAPI):
                 "message",
                 "callback_query",
                 "channel_post",
+                "pre_checkout_query",
             ]
             try:
                 wh = await application.bot.get_webhook_info()
@@ -3339,6 +3737,7 @@ async def lifespan(fastapi_app: FastAPI):
                         url=full_webhook_url,
                         allowed_updates=allowed_updates,
                         drop_pending_updates=True,
+                        secret_token=WEBHOOK_SECRET,
                     )
                     logger.info(f"✅ Webhook set: {full_webhook_url}")
                     await notify_admin(
@@ -3357,6 +3756,7 @@ async def lifespan(fastapi_app: FastAPI):
                         url=full_webhook_url,
                         allowed_updates=allowed_updates,
                         drop_pending_updates=False,
+                        secret_token=WEBHOOK_SECRET,
                     )
                     logger.info("✅ Webhook update types synced without dropping pending updates")
                 else:
@@ -3416,6 +3816,14 @@ fastapi_app = FastAPI(lifespan=lifespan)
 @fastapi_app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     """Endpoint yang dipanggil Telegram setiap ada update baru."""
+    provided_secret = request.headers.get(
+        "X-Telegram-Bot-Api-Secret-Token",
+        "",
+    )
+    if not hmac.compare_digest(provided_secret, WEBHOOK_SECRET):
+        logger.warning("Rejected Telegram webhook request with an invalid secret")
+        return Response(content="forbidden", status_code=403)
+
     try:
         data = await request.json()
         message = data.get("message")

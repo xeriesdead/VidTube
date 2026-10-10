@@ -55,6 +55,18 @@ Deployed automatically via GitHub push. Railway sets `RAILWAY_PUBLIC_DOMAIN` whi
 - Saved discussion-post quotas are used after the user's current daily quota runs out.
   Existing forwarded-post bonuses remain available and keep their daily limit.
 
+### Telegram Stars quota purchases
+
+- `/buy_quota` sells one permanent quota for 1 Telegram Star (`XTR`).
+- The quota is added only after Telegram confirms a successful payment and is
+  stored in the existing SQLite database. Payment charge IDs prevent duplicate
+  quota credits when Telegram retries an update.
+- `/terms` explains the purchase and `/paysupport` sends a help request to the
+  configured admins.
+- Railway's webhook must deliver `pre_checkout_query` updates. The webhook
+  secret is derived from the existing bot token, so no additional environment
+  variable is needed.
+
 ### Persistent database storage
 
 SQLite must be stored on a Railway persistent Volume; the normal service filesystem
