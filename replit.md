@@ -35,21 +35,24 @@ Telegram bot for media sharing with admin upload, broadcast, and scheduled broad
 
 Deployed automatically via GitHub push. Railway sets `RAILWAY_PUBLIC_DOMAIN` which the bot uses to register its webhook.
 
-### Permanent reaction quota
+### Permanent discussion-post quota
 
 - The bot must be an administrator in VidTube's linked discussion group to
-  receive user-specific Telegram `message_reaction` updates.
-- Only reactions on the automatic-forward copy of a VidTube channel post in the
-  linked discussion group are eligible. Reactions on ordinary comments are not.
+  receive user-authored comment/reply message updates.
+- Reactions on the channel post itself are not claim triggers; they do not give
+  the bot a reliable user identity for a private claim.
+- A user comment or reply to the automatic-forward copy of a VidTube channel post
+  in the linked discussion group is eligible. Standalone group messages are not.
 - The bot must receive the automatic-forward message to map it to its channel
   post, so test with a post mirrored after the bot is added as a group admin.
-- A qualifying reaction creates a pending private claim. The user must press the
+- A qualifying comment creates one pending private claim per user/channel post.
+  The user must press the
   inline button in the bot's DM to add one permanent quota, once per
   user/channel-post pair.
 - If Telegram will not let the bot DM the user because they have not started
   the bot, the claim stays pending and is sent after they use `/start`. The bot
   does not post quota notifications in the discussion group.
-- Saved reaction quotas are used after the user's current daily quota runs out.
+- Saved discussion-post quotas are used after the user's current daily quota runs out.
   Existing forwarded-post bonuses remain available and keep their daily limit.
 
 ### Persistent database storage
