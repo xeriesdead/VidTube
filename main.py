@@ -151,6 +151,15 @@ BOT_TEXT = {
         "profile_button": "👤 Profil",
         "claim_button": "🎁 Klaim Kuota",
         "buy_quota_button": "⭐ Beli +1 Kuota (1 Star)",
+        "profile_premium": "├ STATUS PREMIUM",
+        "premium_active": "Aktif",
+        "premium_inactive": "Tidak aktif",
+        "admin_premium_usage": "Gunakan /set_premium <user_id> <on|off>.",
+        "admin_premium_updated": (
+            "✅ Status Premium user <code>{user_id}</code> diubah menjadi "
+            "<b>{status}</b>."
+        ),
+        "admin_premium_error": "Status Premium tidak berhasil disimpan. Coba lagi.",
         "language_button": "🌐 Bahasa",
         "help_button": "ℹ️ Bantuan",
         "menu_placeholder": "Pilih menu bot",
@@ -274,7 +283,7 @@ BOT_TEXT = {
         "reaction_claim_invalid": "Klaim bonus komentar ini tidak valid atau bukan milik akun Anda.",
         "profile_title": "👤 <b>ACCOUNT</b>",
         "profile_identity": "<b>IDENTITAS AKUN</b>",
-        "profile_status": "<b>STATUS KUOTA</b>",
+        "profile_status": "<b>STATUS AKUN & KUOTA</b>",
         "profile_name": "├ NAMA",
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
@@ -303,6 +312,15 @@ BOT_TEXT = {
         "profile_button": "👤 Profile",
         "claim_button": "🎁 Claim Quota",
         "buy_quota_button": "⭐ Buy +1 Quota (1 Star)",
+        "profile_premium": "├ PREMIUM STATUS",
+        "premium_active": "Active",
+        "premium_inactive": "Inactive",
+        "admin_premium_usage": "Use /set_premium <user_id> <on|off>.",
+        "admin_premium_updated": (
+            "✅ Premium status for user <code>{user_id}</code> changed to "
+            "<b>{status}</b>."
+        ),
+        "admin_premium_error": "Could not save the Premium status. Please try again.",
         "language_button": "🌐 Language",
         "help_button": "ℹ️ Help",
         "menu_placeholder": "Choose a bot menu",
@@ -426,7 +444,7 @@ BOT_TEXT = {
         "reaction_claim_invalid": "This comment bonus claim is invalid or does not belong to your account.",
         "profile_title": "👤 <b>ACCOUNT</b>",
         "profile_identity": "<b>ACCOUNT DETAILS</b>",
-        "profile_status": "<b>QUOTA STATUS</b>",
+        "profile_status": "<b>ACCOUNT & QUOTA STATUS</b>",
         "profile_name": "├ NAME",
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
@@ -543,7 +561,8 @@ async def init_db():
                 admin_quota INTEGER NOT NULL DEFAULT 0,
                 quota_notice_date TEXT,
                 language TEXT,
-                reaction_quota INTEGER NOT NULL DEFAULT 0
+                reaction_quota INTEGER NOT NULL DEFAULT 0,
+                is_premium INTEGER NOT NULL DEFAULT 0
             )
         """)
 
@@ -683,6 +702,11 @@ async def init_db():
                 "ALTER TABLE users ADD COLUMN reaction_quota INTEGER NOT NULL DEFAULT 0"
             )
             logger.info("✅ Migrated users table: added reaction_quota column")
+        if "is_premium" not in existing_cols:
+            c.execute(
+                "ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("✅ Migrated users table: added is_premium column")
 
         # Give existing accounts their initial daily quota when this feature is
         # first enabled. Later days require the user to claim the notification.
@@ -758,6 +782,28 @@ async def save_user(uid, username=None):
         )
     except Exception as e:
         logger.error(f"Error saving user: {e}")
+
+async def is_premium_user(uid):
+    row = await db_pool.execute_read(
+        "SELECT is_premium FROM users WHERE user_id=?",
+        (uid,),
+        fetch_one=True
+    )
+    return bool(row and row[0])
+
+async def set_user_premium(uid, enabled):
+    try:
+        await db_pool.execute_write(
+            """
+            INSERT INTO users (user_id, is_premium) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET is_premium=excluded.is_premium
+            """,
+            (uid, int(enabled))
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error setting Premium status for {uid}: {e}")
+        return False
 
 async def get_user_language(uid):
     row = await db_pool.execute_read(
@@ -1904,6 +1950,41 @@ async def add_quota_command(update, context):
         parse_mode="HTML",
     )
 
+async def set_premium_command(update, context):
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Admin only")
+        return
+
+    language = await get_user_language(user.id) or "id"
+    if len(context.args) != 2:
+        await update.message.reply_text(tr(language, "admin_premium_usage"))
+        return
+
+    try:
+        target_id = int(context.args[0])
+    except (TypeError, ValueError):
+        target_id = 0
+    enabled = context.args[1].lower()
+    if target_id <= 0 or enabled not in ("on", "off"):
+        await update.message.reply_text(tr(language, "admin_premium_usage"))
+        return
+
+    is_enabled = enabled == "on"
+    if not await set_user_premium(target_id, is_enabled):
+        await update.message.reply_text(tr(language, "admin_premium_error"))
+        return
+
+    await update.message.reply_text(
+        tr(
+            language,
+            "admin_premium_updated",
+            user_id=target_id,
+            status=tr(language, "premium_active" if is_enabled else "premium_inactive"),
+        ),
+        parse_mode="HTML",
+    )
+
 async def menu_text_handler(update, context):
     """Route persistent keyboard buttons and language choices."""
     user = update.effective_user
@@ -2046,6 +2127,7 @@ async def start_command(update, context):
         await update.message.reply_text(tr(language, "invalid_link"))
         return
 
+    premium = await is_premium_user(uid)
     quota_date = datetime.now(WIB).date().isoformat()
     consumed, _, quota_source = await consume_daily_quota(uid, quota_date)
     if not consumed:
@@ -2084,7 +2166,9 @@ async def start_command(update, context):
     send_tasks = []
 
     for file_id, media_type, caption in media_list:
-        task = send_media_item(context.bot, uid, file_id, media_type, caption, sent_ids)
+        task = send_media_item(
+            context.bot, uid, file_id, media_type, caption, sent_ids, premium
+        )
         send_tasks.append(task)
 
     await asyncio.gather(*send_tasks, return_exceptions=True)
@@ -2263,7 +2347,12 @@ async def build_profile_message(user):
         language,
         "profile_claimed" if claimed_today else "profile_unclaimed"
     )
+    premium_status = tr(
+        language,
+        "premium_active" if await is_premium_user(uid) else "premium_inactive",
+    )
     quota_status = (
+        f"{tr(language, 'profile_premium')}: <b>{premium_status}</b>\n"
         f"{tr(language, 'profile_remaining')}: <b>{remaining}/{total_quota}</b>\n"
         f"{tr(language, 'profile_reaction_quota')}: "
         f"<b>{await get_reaction_quota(uid)}</b>\n"
@@ -2437,15 +2526,17 @@ async def close_expired_notification(update, context):
     except Exception as e:
         logger.warning(f"Could not close expired notification for {owner_id}: {e}")
 
-async def send_media_item(bot, uid, file_id, media_type, caption, sent_ids):
+async def send_media_item(
+    bot, uid, file_id, media_type, caption, sent_ids, premium=False
+):
     try:
         if media_type == "photo":
             msg = await bot.send_photo(
-                uid, file_id, caption=caption or "", protect_content=True
+                uid, file_id, caption=caption or "", protect_content=not premium
             )
         elif media_type == "video":
             msg = await bot.send_video(
-                uid, file_id, caption=caption or "", protect_content=True
+                uid, file_id, caption=caption or "", protect_content=not premium
             )
         else:
             return
@@ -2534,7 +2625,7 @@ async def broadcast_command(update, context):
         return
 
     msg_to_send = update.message.reply_to_message
-    users = await db_pool.execute_read("SELECT user_id FROM users")
+    users = await db_pool.execute_read("SELECT user_id, is_premium FROM users")
     total = len(users)
 
     if total == 0:
@@ -2556,7 +2647,7 @@ async def broadcast_command(update, context):
 
     try:
         for i, row in enumerate(users):
-            user_id = row[0]
+            user_id, premium = row
 
             if not _active_broadcasts.get(uid):
                 break
@@ -2565,7 +2656,10 @@ async def broadcast_command(update, context):
                 await asyncio.wait_for(
                     msg_to_send.copy(
                         user_id,
-                        protect_content=msg_to_send.effective_attachment is not None
+                        protect_content=(
+                            msg_to_send.effective_attachment is not None
+                            and not bool(premium)
+                        )
                     ),
                     timeout=10.0
                 )
@@ -2583,7 +2677,10 @@ async def broadcast_command(update, context):
                     await asyncio.wait_for(
                         msg_to_send.copy(
                             user_id,
-                            protect_content=msg_to_send.effective_attachment is not None
+                            protect_content=(
+                                msg_to_send.effective_attachment is not None
+                                and not bool(premium)
+                            )
                         ),
                         timeout=10.0
                     )
@@ -2805,31 +2902,33 @@ async def bc_unschedule_command(update, context):
     )
     logger.info(f"📅 Admin {uid} deleted schedule ID={sched_id}")
 
-async def _send_one_scheduled(bot, user_id, msg_type, file_id, text_content, caption):
+async def _send_one_scheduled(
+    bot, user_id, msg_type, file_id, text_content, caption, premium=False
+):
     cap = caption or None
     if msg_type == "text":
         await bot.send_message(user_id, text_content)
     elif msg_type == "photo":
         await bot.send_photo(
-            user_id, file_id, caption=cap, protect_content=True
+            user_id, file_id, caption=cap, protect_content=not premium
         )
     elif msg_type == "video":
         await bot.send_video(
-            user_id, file_id, caption=cap, protect_content=True
+            user_id, file_id, caption=cap, protect_content=not premium
         )
     elif msg_type == "document":
         await bot.send_document(
-            user_id, file_id, caption=cap, protect_content=True
+            user_id, file_id, caption=cap, protect_content=not premium
         )
     elif msg_type == "animation":
         await bot.send_animation(
-            user_id, file_id, caption=cap, protect_content=True
+            user_id, file_id, caption=cap, protect_content=not premium
         )
 
 async def _execute_scheduled_broadcast(row):
     sched_id, admin_id, schedule_time, msg_type, file_id, text_content, caption = row
 
-    users = await db_pool.execute_read("SELECT user_id FROM users")
+    users = await db_pool.execute_read("SELECT user_id, is_premium FROM users")
     total = len(users)
     if total == 0:
         return
@@ -2838,10 +2937,13 @@ async def _execute_scheduled_broadcast(row):
     sent = failed_blocked = failed_other = 0
 
     for row_user in users:
-        user_id = row_user[0]
+        user_id, premium = row_user
         try:
             await asyncio.wait_for(
-                _send_one_scheduled(application.bot, user_id, msg_type, file_id, text_content, caption),
+                _send_one_scheduled(
+                    application.bot, user_id, msg_type, file_id, text_content,
+                    caption, premium=bool(premium)
+                ),
                 timeout=10.0
             )
             sent += 1
@@ -2856,7 +2958,10 @@ async def _execute_scheduled_broadcast(row):
             await asyncio.sleep(wait_sec)
             try:
                 await asyncio.wait_for(
-                    _send_one_scheduled(application.bot, user_id, msg_type, file_id, text_content, caption),
+                    _send_one_scheduled(
+                        application.bot, user_id, msg_type, file_id, text_content,
+                        caption, premium=bool(premium)
+                    ),
                     timeout=10.0
                 )
                 sent += 1
@@ -3677,6 +3782,7 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("terms", terms_command))
         application.add_handler(CommandHandler("paysupport", payment_support_command))
         application.add_handler(CommandHandler("add_quota", add_quota_command))
+        application.add_handler(CommandHandler("set_premium", set_premium_command))
         application.add_handler(
             CommandHandler("set_share_post", set_share_post_command)
         )

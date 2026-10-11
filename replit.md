@@ -98,3 +98,9 @@ they are easier to download again through Telegram's bot file-size limit.
 
 - This project runs on Railway + GitHub. Replit is used as a code editor only — do not set up a run workflow or attempt to run the bot here.
 - Untuk setiap perubahan pada proyek ini, bantu commit dan push ke GitHub. Jika akses push belum tersedia, jelaskan hambatannya; jangan menyatakan sudah push sebelum berhasil.
+
+### Premium media access
+
+- Premium users can forward and save media sent through media links, manual broadcasts, and scheduled broadcasts. Media sent to non-Premium users remains protected.
+- New users default to non-Premium. Until Premium Stars pricing and benefits are defined, admins can temporarily grant or revoke access with `/set_premium <user_id> on|off`.
+- `/profile` shows the current Premium status. No Premium purchase or Stars invoice has been added; the existing `/buy_quota` purchase remains separate.
