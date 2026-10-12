@@ -27,12 +27,12 @@ from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButton,
-    ReplyKeyboardMarkup, BotCommand
+    ReplyKeyboardMarkup, BotCommand, LabeledPrice
 )
 from telegram.error import RetryAfter, Forbidden, BadRequest
 from telegram.ext import (
     Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler,
-    MessageHandler, filters
+    MessageHandler, PreCheckoutQueryHandler, filters
 )
 
 from config import (
@@ -127,7 +127,10 @@ class DatabasePool:
 db_pool: Optional[DatabasePool] = None
 WIB = timezone(timedelta(hours=7))
 DAILY_QUOTA = 3
-MAX_SHARE_BONUSES_PER_DAY = 10
+LEGACY_MAX_SHARE_BONUSES_PER_DAY = 10
+PREMIUM_PRICE_STARS = 10
+PREMIUM_DURATION_DAYS = 30
+SAVED_MEDIA_PAGE_SIZE = 6
 _daily_quota_notice_task = None
 
 BOT_TEXT = {
@@ -150,6 +153,8 @@ BOT_TEXT = {
             "• Buka media melalui link dari admin.\n"
             "• Gunakan <b>Profil</b> untuk melihat kuota.\n"
             "• Tekan <b>Klaim Kuota</b> untuk mengambil 3 kuota harian.\n"
+            "• Gunakan /premium untuk membeli akses simpan media 30 hari.\n"
+            "• Gunakan /saved untuk membuka media yang tersimpan.\n"
             "• Gunakan <b>Bahasa</b> untuk mengganti bahasa."
         ),
         "join_required": "⚠️ Wajib bergabung ke channel {channel} untuk mengakses media.",
@@ -164,29 +169,42 @@ BOT_TEXT = {
             "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
             "Kamu sudah menggunakan semua {total} kuota hari ini. "
             "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
-            "Buka channel {channel} dan teruskan postingan mana saja ke bot untuk "
-            "mendapat +1 kuota. Maksimal {max_bonus} bonus per akun per hari; "
-            "setiap postingan bisa memberi bonus sekali sehari."
+            "Premium 30 hari seharga 10 Telegram Stars memungkinkan kamu menyimpan "
+            "media yang pernah dikirim bot. Premium tidak menambah kuota harian."
         ),
-        "share_post_button": "📢 Buka Channel VidTube",
-        "share_bonus_success": (
-            "✅ Bonus +1 kuota berhasil ditambahkan.\n"
-            "Kuota tersisa: <b>{remaining}/{total}</b>\n"
-            "Bonus hari ini: <b>{bonus_count}/{max_bonus}</b>"
+        "share_bonus_replaced": (
+            "Bonus kuota dari forward channel sudah diganti dengan Premium. "
+            "Forward tidak lagi menambah kuota. Gunakan /premium untuk membeli."
         ),
-        "share_bonus_duplicate": "Postingan ini sudah memberi bonus untuk akun Anda hari ini.",
-        "share_bonus_daily_limit": "Batas {max_bonus} bonus kuota hari ini sudah tercapai.",
-        "share_bonus_error": "Bonus kuota belum bisa ditambahkan. Coba lagi nanti.",
-        "share_post_wrong_channel": "Teruskan postingan dari channel resmi {channel}.",
-        "share_post_invalid_forward": (
-            "Postingan ini tidak bisa diverifikasi. Gunakan fitur Teruskan "
-            "langsung dari postingan di channel resmi."
+        "premium_button": "⭐ Beli Premium — 10 Stars",
+        "premium_offer": (
+            "⭐ <b>VidTube Premium — 30 hari</b>\n\n"
+            "Harga: <b>10 Telegram Stars</b> (sekali bayar, tanpa perpanjangan otomatis).\n"
+            "Premium memungkinkan kamu menyimpan media yang pernah dikirim bot dan "
+            "membukanya kembali dengan /saved. Premium tidak menambah kuota harian."
         ),
-        "share_post_seed_usage": (
-            "Balas pesan forward terbaru dari {channel} dengan perintah "
-            "/set_share_post untuk menyinkronkan postingan awal."
-        ),
-        "share_post_saved": "✅ Postingan terbaru untuk bonus kuota sudah disinkronkan.",
+        "premium_invoice_title": "VidTube Premium 30 Hari",
+        "premium_invoice_description": "Simpan dan buka kembali media yang pernah dikirim bot selama 30 hari.",
+        "premium_invoice_label": "Premium 30 Hari",
+        "premium_status_active": "Aktif sampai <b>{expires}</b> WIB. Pembelian berikutnya menambah 30 hari.",
+        "premium_status_inactive": "Belum aktif.",
+        "premium_payment_success": "✅ Pembayaran diterima. Premium aktif sampai <b>{expires}</b> WIB.",
+        "premium_payment_duplicate": "Pembayaran ini sudah diproses. Premium aktif sampai <b>{expires}</b> WIB.",
+        "premium_payment_invalid": "Pembayaran belum dapat diverifikasi. Gunakan /paysupport agar admin dapat membantu.",
+        "premium_invoice_error": "Invoice tidak dapat dibuka sekarang. Coba ketuk tombol Premium lagi.",
+        "premium_precheckout_invalid": "Invoice Premium tidak valid. Jalankan /premium untuk membuat invoice baru.",
+        "premium_save_button": "💾 Simpan",
+        "premium_save_success": "✅ Media tersimpan. Gunakan /saved untuk membukanya kembali.",
+        "premium_save_duplicate": "Media ini sudah tersimpan. Gunakan /saved untuk membukanya kembali.",
+        "premium_required": "Fitur simpan media hanya tersedia untuk pengguna Premium.",
+        "saved_title": "💾 <b>Media tersimpan</b> — halaman {page}/{pages}\nPilih media untuk mengirimkannya kembali.",
+        "saved_empty": "Belum ada media tersimpan. Tekan tombol 💾 Simpan pada media yang dikirim bot.",
+        "saved_item_button": "{number}. {label}",
+        "saved_open_success": "Media dikirim kembali.",
+        "saved_missing": "Media tersimpan tidak ditemukan.",
+        "paysupport_prompt": "Jelaskan masalah pembayaran setelah perintah ini, contoh: /paysupport Pembayaran berhasil tetapi Premium belum aktif",
+        "paysupport_sent": "✅ Pesan bantuan pembayaran sudah dikirim ke admin.",
+        "paysupport_unavailable": "Pesan bantuan belum terkirim. Coba lagi beberapa saat atau hubungi admin bot.",
         "claim_success": "✅ 3 kuota berhasil diklaim. Selamat menggunakan!",
         "claim_already": "Kuota hari ini sudah diklaim.",
         "claim_expired": "Tombol klaim sudah kedaluwarsa. Gunakan /quota untuk kuota hari ini.",
@@ -213,6 +231,7 @@ BOT_TEXT = {
         "profile_unclaimed": "Belum diklaim",
         "profile_total_files": "📂 Total file dibuka",
         "profile_reset": "⏰ Kuota harian tersedia mulai 00.00 WIB.",
+        "profile_premium": "Status Premium",
         "media_expiry": "⌛ {count} media akan terhapus otomatis dalam 1 jam.",
         "expired_title": "📌 <b>File Telah Dihapus Otomatis</b>",
         "expired_body": (
@@ -243,6 +262,8 @@ BOT_TEXT = {
             "• Open media using a link shared by the admin.\n"
             "• Use <b>Profile</b> to check your quota.\n"
             "• Press <b>Claim Quota</b> to claim 3 daily quotas.\n"
+            "• Use /premium to buy 30-day media-saving access.\n"
+            "• Use /saved to reopen saved media.\n"
             "• Use <b>Language</b> to change the bot language."
         ),
         "join_required": "⚠️ Join channel {channel} to access this media.",
@@ -257,29 +278,42 @@ BOT_TEXT = {
             "⛔ <b>Daily Quota Used</b>\n\n"
             "You have used all {total} quotas today. Your next quota is available "
             "after 00:00 WIB.\n\n"
-            "Open the {channel} channel and forward any post to the bot for +1 quota. "
-            "Up to {max_bonus} bonuses per account per day; each post can award a "
-            "bonus once a day."
+            "30-day Premium costs 10 Telegram Stars and lets you save media sent by "
+            "the bot. Premium does not add daily quota."
         ),
-        "share_post_button": "📢 Open VidTube Channel",
-        "share_bonus_success": (
-            "✅ +1 quota added.\n"
-            "Remaining quota: <b>{remaining}/{total}</b>\n"
-            "Today's bonuses: <b>{bonus_count}/{max_bonus}</b>"
+        "share_bonus_replaced": (
+            "The channel-forward quota bonus has been replaced by Premium. "
+            "Forwarding no longer adds quota. Use /premium to purchase."
         ),
-        "share_bonus_duplicate": "This post has already awarded a bonus to your account today.",
-        "share_bonus_daily_limit": "You have reached today's limit of {max_bonus} quota bonuses.",
-        "share_bonus_error": "The quota bonus could not be added. Please try again later.",
-        "share_post_wrong_channel": "Forward a post from the official {channel} channel.",
-        "share_post_invalid_forward": (
-            "This post cannot be verified. Use Telegram's Forward action directly "
-            "on a post in the official channel."
+        "premium_button": "⭐ Buy Premium — 10 Stars",
+        "premium_offer": (
+            "⭐ <b>VidTube Premium — 30 days</b>\n\n"
+            "Price: <b>10 Telegram Stars</b> (one-time payment, no automatic renewal).\n"
+            "Premium lets you save media sent by the bot and reopen it with /saved. "
+            "Premium does not add daily quota."
         ),
-        "share_post_seed_usage": (
-            "Reply to the latest forwarded {channel} post with /set_share_post "
-            "to sync the initial post."
-        ),
-        "share_post_saved": "✅ The latest post for quota bonuses has been synced.",
+        "premium_invoice_title": "VidTube Premium 30 Days",
+        "premium_invoice_description": "Save and reopen media sent by the bot for 30 days.",
+        "premium_invoice_label": "Premium 30 Days",
+        "premium_status_active": "Active until <b>{expires}</b> WIB. Another purchase adds 30 days.",
+        "premium_status_inactive": "Not active.",
+        "premium_payment_success": "✅ Payment received. Premium is active until <b>{expires}</b> WIB.",
+        "premium_payment_duplicate": "This payment was already processed. Premium is active until <b>{expires}</b> WIB.",
+        "premium_payment_invalid": "The payment could not be verified. Use /paysupport so the admin can help.",
+        "premium_invoice_error": "The invoice could not be opened. Please tap the Premium button again.",
+        "premium_precheckout_invalid": "This Premium invoice is invalid. Use /premium to create a new invoice.",
+        "premium_save_button": "💾 Save",
+        "premium_save_success": "✅ Media saved. Use /saved to reopen it.",
+        "premium_save_duplicate": "This media is already saved. Use /saved to reopen it.",
+        "premium_required": "Saving media is available to Premium users only.",
+        "saved_title": "💾 <b>Saved media</b> — page {page}/{pages}\nChoose media to send it again.",
+        "saved_empty": "No saved media yet. Tap 💾 Save on media sent by the bot.",
+        "saved_item_button": "{number}. {label}",
+        "saved_open_success": "Media sent again.",
+        "saved_missing": "Saved media was not found.",
+        "paysupport_prompt": "Describe the payment issue after this command, e.g. /paysupport Payment succeeded but Premium did not activate",
+        "paysupport_sent": "✅ Your payment support message was sent to the admin.",
+        "paysupport_unavailable": "Your support message could not be sent. Try again later or contact the bot admin.",
         "claim_success": "✅ You claimed 3 quotas. Enjoy!",
         "claim_already": "Today's quota has already been claimed.",
         "claim_expired": "This claim button has expired. Use /quota to check today's quota.",
@@ -306,6 +340,7 @@ BOT_TEXT = {
         "profile_unclaimed": "Not claimed",
         "profile_total_files": "📂 Total files opened",
         "profile_reset": "⏰ Daily quota is available from 00:00 WIB.",
+        "profile_premium": "Premium status",
         "media_expiry": "⌛ {count} media item(s) will be deleted automatically in 1 hour.",
         "expired_title": "📌 <b>Media Automatically Deleted</b>",
         "expired_body": (
@@ -340,6 +375,14 @@ def command_keyboard(language):
         one_time_keyboard=False,
         input_field_placeholder=text["menu_placeholder"],
     )
+
+def premium_purchase_keyboard(language):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            tr(language, "premium_button"),
+            callback_data="premium_buy",
+        )
+    ]])
 
 def language_keyboard():
     return ReplyKeyboardMarkup(
@@ -408,17 +451,45 @@ async def init_db():
                 quota INTEGER NOT NULL DEFAULT 3,
                 quota_date TEXT,
                 quota_notice_date TEXT,
-                language TEXT
+                language TEXT,
+                premium_until TEXT
+            )
+        """)
+
+        if "premium_until" not in [
+            row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()
+        ]:
+            c.execute("ALTER TABLE users ADD COLUMN premium_until TEXT")
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS premium_payments(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                telegram_charge_id TEXT NOT NULL UNIQUE,
+                invoice_payload TEXT NOT NULL,
+                amount_stars INTEGER NOT NULL,
+                premium_until TEXT NOT NULL,
+                paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
         c.execute("""
-            CREATE TABLE IF NOT EXISTS share_post_state(
-                channel_id INTEGER PRIMARY KEY,
-                latest_message_id INTEGER NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS saved_media(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                source_media_id INTEGER NOT NULL,
+                file_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                caption TEXT DEFAULT '',
+                saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, source_media_id)
             )
         """)
+
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_saved_media_user "
+            "ON saved_media(user_id, saved_at)"
+        )
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS share_quota_rewards(
@@ -585,6 +656,96 @@ async def set_user_language(uid, language):
         logger.error(f"Error setting language for {uid}: {e}")
         return False
 
+def parse_datetime_utc(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+async def get_premium_until(uid):
+    row = await db_pool.execute_read(
+        "SELECT premium_until FROM users WHERE user_id=?",
+        (uid,),
+        fetch_one=True,
+    )
+    return row[0] if row else None
+
+async def is_premium_active(uid, now=None):
+    expiry = parse_datetime_utc(await get_premium_until(uid))
+    now = now or datetime.now(timezone.utc)
+    return bool(expiry and expiry > now.astimezone(timezone.utc))
+
+def format_premium_expiry(value):
+    expiry = parse_datetime_utc(value)
+    if not expiry:
+        return "-"
+    return expiry.astimezone(WIB).strftime("%d-%m-%Y %H:%M")
+
+def make_premium_invoice_payload(uid):
+    return f"premium:{PREMIUM_DURATION_DAYS}:{int(uid)}:{gen_code(16)}"
+
+def premium_payload_matches_user(payload, uid):
+    try:
+        product, duration, owner_id, nonce = payload.split(":", 3)
+        return (
+            product == "premium"
+            and duration == str(PREMIUM_DURATION_DAYS)
+            and int(owner_id) == int(uid)
+            and bool(nonce)
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+async def activate_premium_payment(uid, charge_id, invoice_payload):
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT premium_until FROM premium_payments "
+                "WHERE telegram_charge_id=?",
+                (charge_id,),
+            )
+            existing_payment = cursor.fetchone()
+            if existing_payment:
+                return "duplicate", existing_payment[0]
+
+            cursor.execute(
+                "SELECT premium_until FROM users WHERE user_id=?",
+                (uid,),
+            )
+            user_row = cursor.fetchone()
+            if not user_row:
+                return "user_missing", None
+
+            now = datetime.now(timezone.utc)
+            current_expiry = parse_datetime_utc(user_row[0])
+            base_time = current_expiry if current_expiry and current_expiry > now else now
+            new_expiry = (base_time + timedelta(days=PREMIUM_DURATION_DAYS)).isoformat()
+
+            cursor.execute(
+                "INSERT INTO premium_payments "
+                "(user_id, telegram_charge_id, invoice_payload, amount_stars, premium_until) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (uid, charge_id, invoice_payload, PREMIUM_PRICE_STARS, new_expiry),
+            )
+            cursor.execute(
+                "UPDATE users SET premium_until=? WHERE user_id=?",
+                (new_expiry, uid),
+            )
+            conn.commit()
+            return "activated", new_expiry
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
+
 async def get_daily_quota(uid, today=None):
     today = today or datetime.now(WIB).date().isoformat()
     row = await db_pool.execute_read(
@@ -658,44 +819,6 @@ async def get_share_bonus_count(uid, today=None):
     )
     return int(row[0] or 0) if row else 0
 
-async def get_latest_share_post_id():
-    row = await db_pool.execute_read(
-        "SELECT latest_message_id FROM share_post_state WHERE channel_id=?",
-        (CHANNEL_ID,),
-        fetch_one=True,
-    )
-    return int(row[0]) if row else None
-
-async def save_latest_share_post(post_id):
-    await db_pool.execute_write(
-        """
-        INSERT INTO share_post_state (channel_id, latest_message_id)
-        VALUES (?, ?)
-        ON CONFLICT(channel_id) DO UPDATE SET
-            latest_message_id=MAX(latest_message_id, excluded.latest_message_id),
-            updated_at=CURRENT_TIMESTAMP
-        """,
-        (CHANNEL_ID, int(post_id)),
-    )
-
-def share_post_url(post_id=None):
-    channel_handle = CHANNEL.strip().rstrip("/")
-    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
-        if channel_handle.startswith(prefix):
-            channel_handle = channel_handle.removeprefix(prefix).split("/", 1)[0]
-            break
-    channel_handle = channel_handle.lstrip("@/")
-    channel_url = f"https://t.me/{channel_handle}"
-    return f"{channel_url}/{int(post_id)}" if post_id is not None else channel_url
-
-def share_post_keyboard(post_id, language):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            tr(language, "share_post_button"),
-            url=share_post_url(post_id),
-        )
-    ]])
-
 def get_forwarded_channel_post(message):
     origin = getattr(message, "forward_origin", None)
     if origin:
@@ -716,66 +839,13 @@ def get_forwarded_channel_post(message):
         )
     return None
 
-async def grant_share_quota(uid, post_id, today=None):
-    """Grant one bonus per user/post/day, capped at ten rewards per WIB day."""
-    today = today or datetime.now(WIB).date().isoformat()
-    async with db_pool.write_lock:
-        conn = await db_pool.get()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT quota, quota_date FROM users WHERE user_id=?",
-                (uid,),
-            )
-            user_row = cursor.fetchone()
-            if not user_row:
-                return "user_not_found", 0, DAILY_QUOTA
-
-            current_quota = max(0, int(user_row[0] or 0))
-            quota_date = user_row[1]
-            cursor.execute(
-                "SELECT 1 FROM share_quota_rewards "
-                "WHERE user_id=? AND post_id=? AND reward_date=?",
-                (uid, post_id, today),
-            )
-            if cursor.fetchone():
-                return "duplicate", current_quota if quota_date == today else 0, DAILY_QUOTA
-
-            cursor.execute(
-                "SELECT COUNT(*) FROM share_quota_rewards "
-                "WHERE user_id=? AND reward_date=?",
-                (uid, today),
-            )
-            bonus_count = int(cursor.fetchone()[0] or 0)
-            if bonus_count >= MAX_SHARE_BONUSES_PER_DAY:
-                return "daily_limit", current_quota if quota_date == today else 0, (
-                    DAILY_QUOTA + bonus_count
-                )
-
-            cursor.execute(
-                "INSERT INTO share_quota_rewards (user_id, post_id, reward_date) "
-                "VALUES (?, ?, ?)",
-                (uid, post_id, today),
-            )
-            remaining = current_quota + 1 if quota_date == today else DAILY_QUOTA + 1
-            cursor.execute(
-                "UPDATE users SET quota=?, quota_date=? WHERE user_id=?",
-                (remaining, today, uid),
-            )
-            conn.commit()
-            return "success", remaining, DAILY_QUOTA + bonus_count + 1
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            await db_pool.put(conn)
-
 async def refund_daily_quota(uid, today):
     try:
+        # Keep already-earned legacy share bonuses until the user's day resets.
         await db_pool.execute_write(
             "UPDATE users SET quota=MIN(?, quota+1) "
             "WHERE user_id=? AND quota_date=?",
-            (DAILY_QUOTA + MAX_SHARE_BONUSES_PER_DAY, uid, today)
+            (DAILY_QUOTA + LEGACY_MAX_SHARE_BONUSES_PER_DAY, uid, today)
         )
     except Exception as e:
         logger.error(f"Error refunding daily quota for {uid}: {e}")
@@ -842,8 +912,65 @@ async def get_last_backup():
 
 async def get_media_by_code(code) -> List[Tuple]:
     return await db_pool.execute_read(
-        "SELECT file_id, type, caption FROM media WHERE code=? ORDER BY rowid",
+        "SELECT id, file_id, type, caption FROM media WHERE code=? ORDER BY rowid",
         (code,)
+    )
+
+async def save_media_for_user(uid, source_media_id):
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT file_id, type, caption FROM media WHERE id=?",
+                (source_media_id,),
+            )
+            source = cursor.fetchone()
+            if not source:
+                return "missing"
+
+            cursor.execute(
+                "SELECT 1 FROM saved_media "
+                "WHERE user_id=? AND source_media_id=?",
+                (uid, source_media_id),
+            )
+            if cursor.fetchone():
+                return "duplicate"
+
+            cursor.execute(
+                "INSERT INTO saved_media "
+                "(user_id, source_media_id, file_id, type, caption) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (uid, source_media_id, source[0], source[1], source[2] or ""),
+            )
+            conn.commit()
+            return "saved"
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
+
+async def get_saved_media_page(uid, offset=0, limit=SAVED_MEDIA_PAGE_SIZE):
+    total_row = await db_pool.execute_read(
+        "SELECT COUNT(*) FROM saved_media WHERE user_id=?",
+        (uid,),
+        fetch_one=True,
+    )
+    total = int(total_row[0] or 0) if total_row else 0
+    rows = await db_pool.execute_read(
+        "SELECT id, type, caption FROM saved_media "
+        "WHERE user_id=? ORDER BY saved_at DESC, id DESC LIMIT ? OFFSET ?",
+        (uid, limit, offset),
+    )
+    return total, rows
+
+async def get_saved_media_item(uid, saved_id):
+    return await db_pool.execute_read(
+        "SELECT file_id, type, caption FROM saved_media "
+        "WHERE id=? AND user_id=?",
+        (saved_id, uid),
+        fetch_one=True,
     )
 
 async def increment_clicks(code):
@@ -951,6 +1078,147 @@ async def claim_quota_command(update, context):
         reply_markup=command_keyboard(language)
     )
 
+async def send_premium_invoice(bot, uid, language):
+    payload = make_premium_invoice_payload(uid)
+    await bot.send_invoice(
+        chat_id=uid,
+        title=tr(language, "premium_invoice_title"),
+        description=tr(language, "premium_invoice_description"),
+        payload=payload,
+        provider_token="",
+        currency="XTR",
+        prices=[
+            LabeledPrice(
+                tr(language, "premium_invoice_label"),
+                PREMIUM_PRICE_STARS,
+            )
+        ],
+    )
+
+async def premium_command(update, context):
+    user = update.effective_user
+    await save_user(user.id, user.username or "unknown")
+    language = await get_user_language(user.id) or "id"
+    expiry = await get_premium_until(user.id)
+    if await is_premium_active(user.id):
+        message = tr(
+            language,
+            "premium_status_active",
+            expires=format_premium_expiry(expiry),
+        )
+    else:
+        message = tr(language, "premium_offer")
+    await update.message.reply_text(
+        message,
+        parse_mode="HTML",
+        reply_markup=premium_purchase_keyboard(language),
+    )
+
+async def premium_buy_callback(update, context):
+    query = update.callback_query
+    user = query.from_user
+    language = await get_user_language(user.id) or "id"
+    await query.answer()
+    try:
+        await send_premium_invoice(context.bot, user.id, language)
+    except Exception as e:
+        logger.error(f"Could not send Premium invoice to {user.id}: {e}")
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=tr(language, "premium_invoice_error"),
+        )
+
+async def premium_pre_checkout(update, context):
+    query = update.pre_checkout_query
+    language = await get_user_language(query.from_user.id) or "id"
+    valid = (
+        premium_payload_matches_user(query.invoice_payload, query.from_user.id)
+        and query.currency == "XTR"
+        and query.total_amount == PREMIUM_PRICE_STARS
+    )
+    if not valid:
+        await query.answer(
+            ok=False,
+            error_message=tr(language, "premium_precheckout_invalid"),
+        )
+        return
+    await query.answer(ok=True)
+
+async def successful_premium_payment(update, context):
+    message = update.effective_message
+    payment = getattr(message, "successful_payment", None)
+    if not payment:
+        return
+
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+    charge_id = getattr(payment, "telegram_payment_charge_id", None)
+    valid = (
+        premium_payload_matches_user(payment.invoice_payload, user.id)
+        and payment.currency == "XTR"
+        and payment.total_amount == PREMIUM_PRICE_STARS
+        and bool(charge_id)
+    )
+    if not valid:
+        logger.error(f"Invalid Premium Stars payment received for user {user.id}")
+        await message.reply_text(tr(language, "premium_payment_invalid"))
+        return
+
+    await save_user(user.id, user.username or "unknown")
+    try:
+        status, expiry = await activate_premium_payment(
+            user.id,
+            charge_id,
+            payment.invoice_payload,
+        )
+    except Exception as e:
+        logger.error(f"Could not activate Premium for {user.id}: {e}", exc_info=True)
+        await message.reply_text(tr(language, "premium_payment_invalid"))
+        return
+
+    if status == "user_missing":
+        await message.reply_text(tr(language, "premium_payment_invalid"))
+    else:
+        if status == "duplicate":
+            expiry = await get_premium_until(user.id) or expiry
+        await message.reply_text(
+            tr(
+                language,
+                "premium_payment_duplicate" if status == "duplicate"
+                else "premium_payment_success",
+                expires=format_premium_expiry(expiry),
+            ),
+            parse_mode="HTML",
+        )
+
+async def paysupport_command(update, context):
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+    details = " ".join(context.args or []).strip()
+    if not details:
+        await update.message.reply_text(tr(language, "paysupport_prompt"))
+        return
+
+    details = details[:2000]
+    support_message = (
+        "Telegram Stars payment support request\n"
+        f"User: {user.full_name} ({user.id})\n"
+        f"Username: @{user.username or 'unknown'}\n"
+        f"Message: {details}"
+    )
+    delivered = False
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin_id, support_message)
+            delivered = True
+        except Exception as e:
+            logger.error(f"Could not forward payment support to admin {admin_id}: {e}")
+
+    await update.message.reply_text(
+        tr(language, "paysupport_sent") if delivered
+        else tr(language, "paysupport_unavailable")
+    )
+
 async def menu_text_handler(update, context):
     """Route persistent keyboard buttons and language choices."""
     user = update.effective_user
@@ -1001,6 +1269,9 @@ async def register_bot_commands(bot):
             BotCommand("profile", "Lihat profil dan kuota"),
             BotCommand("quota", "Lihat kuota harian"),
             BotCommand("claim", "Klaim kuota harian"),
+            BotCommand("premium", "Beli VidTube Premium 30 hari"),
+            BotCommand("saved", "Buka media tersimpan"),
+            BotCommand("paysupport", "Bantuan pembayaran Stars"),
             BotCommand("language", "Ganti bahasa"),
             BotCommand("menu", "Tampilkan menu"),
         ],
@@ -1009,6 +1280,9 @@ async def register_bot_commands(bot):
             BotCommand("profile", "View profile and quota"),
             BotCommand("quota", "View daily quota"),
             BotCommand("claim", "Claim daily quota"),
+            BotCommand("premium", "Buy 30-day VidTube Premium"),
+            BotCommand("saved", "Open saved media"),
+            BotCommand("paysupport", "Telegram Stars payment support"),
             BotCommand("language", "Change language"),
             BotCommand("menu", "Show the menu"),
         ],
@@ -1089,15 +1363,13 @@ async def start_command(update, context):
             ]])
             message = tr(language, "quota_unclaimed")
         else:
-            bonus_count = await get_share_bonus_count(uid, quota_date)
+            legacy_bonus_count = await get_share_bonus_count(uid, quota_date)
             message = tr(
                 language,
                 "quota_empty",
-                total=DAILY_QUOTA + bonus_count,
-                max_bonus=MAX_SHARE_BONUSES_PER_DAY,
-                channel=CHANNEL,
+                total=DAILY_QUOTA + legacy_bonus_count,
             )
-            reply_markup = share_post_keyboard(None, language)
+            reply_markup = premium_purchase_keyboard(language)
         await update.message.reply_text(
             message,
             parse_mode="HTML",
@@ -1111,8 +1383,17 @@ async def start_command(update, context):
     sent_ids = []
     send_tasks = []
 
-    for file_id, media_type, caption in media_list:
-        task = send_media_item(context.bot, uid, file_id, media_type, caption, sent_ids)
+    for media_id, file_id, media_type, caption in media_list:
+        task = send_media_item(
+            context.bot,
+            uid,
+            media_id,
+            file_id,
+            media_type,
+            caption,
+            language,
+            sent_ids,
+        )
         send_tasks.append(task)
 
     await asyncio.gather(*send_tasks, return_exceptions=True)
@@ -1181,38 +1462,6 @@ async def start_command(update, context):
 
         context.application.create_task(delete_later())
 
-async def set_share_post_command(update, context):
-    user = update.effective_user
-    language = await get_user_language(user.id) or "id"
-    if not is_admin(user.id):
-        await update.message.reply_text("❌ Admin only")
-        return
-
-    forwarded_message = update.message.reply_to_message
-    forwarded_post = (
-        get_forwarded_channel_post(forwarded_message)
-        if forwarded_message else None
-    )
-    if not forwarded_post:
-        await update.message.reply_text(
-            tr(language, "share_post_seed_usage", channel=CHANNEL)
-        )
-        return
-
-    source_chat_id, post_id = forwarded_post
-    if source_chat_id != CHANNEL_ID or not post_id:
-        await update.message.reply_text(
-            tr(language, "share_post_wrong_channel", channel=CHANNEL)
-        )
-        return
-
-    await save_latest_share_post(post_id)
-    latest_post_id = await get_latest_share_post_id()
-    await update.message.reply_text(
-        tr(language, "share_post_saved"),
-        reply_markup=share_post_keyboard(latest_post_id, language),
-    )
-
 async def handle_share_forward(update, context):
     message = update.message
     if not message:
@@ -1223,45 +1472,12 @@ async def handle_share_forward(update, context):
         return
 
     source_chat_id, post_id = forwarded_post
+    if source_chat_id != CHANNEL_ID or not post_id:
+        return
+
     user = update.effective_user
     language = await get_user_language(user.id) or "id"
-
-    if source_chat_id != CHANNEL_ID:
-        await message.reply_text(
-            tr(language, "share_post_wrong_channel", channel=CHANNEL)
-        )
-        raise ApplicationHandlerStop
-
-    if not post_id:
-        await message.reply_text(
-            tr(language, "share_post_invalid_forward")
-        )
-        raise ApplicationHandlerStop
-
-    await save_user(user.id, user.username or "unknown")
-    status, remaining, total = await grant_share_quota(user.id, post_id)
-    if status == "success":
-        bonus_count = await get_share_bonus_count(user.id)
-        response = tr(
-            language,
-            "share_bonus_success",
-            remaining=remaining,
-            total=total,
-            bonus_count=bonus_count,
-            max_bonus=MAX_SHARE_BONUSES_PER_DAY,
-        )
-    elif status == "duplicate":
-        response = tr(language, "share_bonus_duplicate")
-    elif status == "daily_limit":
-        response = tr(
-            language,
-            "share_bonus_daily_limit",
-            max_bonus=MAX_SHARE_BONUSES_PER_DAY,
-        )
-    else:
-        response = tr(language, "share_bonus_error")
-
-    await message.reply_text(response, parse_mode="HTML")
+    await message.reply_text(tr(language, "share_bonus_replaced"))
     raise ApplicationHandlerStop
 
 async def build_profile_message(user):
@@ -1269,8 +1485,18 @@ async def build_profile_message(user):
     language = await get_user_language(uid) or "id"
     today = datetime.now(WIB).date().isoformat()
     remaining, claimed_today = await get_daily_quota(uid, today)
-    bonus_count = await get_share_bonus_count(uid, today)
-    total_quota = DAILY_QUOTA + bonus_count
+    legacy_bonus_count = await get_share_bonus_count(uid, today)
+    total_quota = DAILY_QUOTA + legacy_bonus_count
+    premium_until = await get_premium_until(uid)
+    premium_status = (
+        tr(
+            language,
+            "premium_status_active",
+            expires=format_premium_expiry(premium_until),
+        )
+        if await is_premium_active(uid)
+        else tr(language, "premium_status_inactive")
+    )
     total_files = await db_pool.execute_read(
         """
         SELECT COUNT(m.id)
@@ -1306,10 +1532,14 @@ async def build_profile_message(user):
         f"{tr(language, 'profile_user_id')}: <code>{uid}</code>\n\n"
         f"{tr(language, 'profile_status')}\n"
         f"{quota_status}\n\n"
+        f"{tr(language, 'profile_premium')}: {premium_status}\n\n"
         f"{tr(language, 'profile_total_files')}: <b>{total_files}</b>"
     )
 
-    keyboard_rows = []
+    keyboard_rows = [[InlineKeyboardButton(
+        tr(language, "premium_button"),
+        callback_data="premium_buy",
+    )]]
     if not claimed_today:
         keyboard_rows.append([InlineKeyboardButton(
             tr(language, "claim_notification_button"),
@@ -1398,12 +1628,222 @@ async def close_expired_notification(update, context):
     except Exception as e:
         logger.warning(f"Could not close expired notification for {owner_id}: {e}")
 
-async def send_media_item(bot, uid, file_id, media_type, caption, sent_ids):
+async def save_received_media_callback(update, context):
+    query = update.callback_query
     try:
+        _, media_id, owner_id = query.data.split(":", 2)
+        media_id = int(media_id)
+        owner_id = int(owner_id)
+    except (AttributeError, TypeError, ValueError):
+        await query.answer(show_alert=True)
+        return
+
+    if query.from_user.id != owner_id:
+        other_language = await get_user_language(query.from_user.id) or "id"
+        await query.answer(
+            tr(other_language, "notification_not_yours"),
+            show_alert=True,
+        )
+        return
+
+    language = await get_user_language(owner_id) or "id"
+    if not await is_premium_active(owner_id):
+        await query.answer(tr(language, "premium_required"), show_alert=True)
+        if query.message:
+            await query.message.reply_text(
+                tr(language, "premium_offer"),
+                parse_mode="HTML",
+                reply_markup=premium_purchase_keyboard(language),
+            )
+        return
+
+    try:
+        status = await save_media_for_user(owner_id, media_id)
+    except Exception as e:
+        logger.error(f"Could not save media {media_id} for {owner_id}: {e}")
+        await query.answer(tr(language, "saved_missing"), show_alert=True)
+        return
+
+    if status == "missing":
+        await query.answer(tr(language, "saved_missing"), show_alert=True)
+    else:
+        await query.answer(
+            tr(language, "premium_save_success" if status == "saved"
+                else "premium_save_duplicate")
+        )
+
+async def render_saved_media_page(uid, language, offset=0):
+    total, rows = await get_saved_media_page(
+        uid,
+        offset=offset,
+        limit=SAVED_MEDIA_PAGE_SIZE,
+    )
+    pages = max(1, (total + SAVED_MEDIA_PAGE_SIZE - 1) // SAVED_MEDIA_PAGE_SIZE)
+    page = min(pages, offset // SAVED_MEDIA_PAGE_SIZE + 1)
+    text = tr(language, "saved_title", page=page, pages=pages)
+    keyboard = []
+
+    for index, row in enumerate(rows, start=offset + 1):
+        saved_id, media_type, caption = row
+        label = (caption or media_type or "media").replace("\n", " ").strip()
+        if len(label) > 24:
+            label = label[:21] + "..."
+        keyboard.append([InlineKeyboardButton(
+            tr(language, "saved_item_button", number=index, label=label),
+            callback_data=f"saved_open:{saved_id}:{uid}",
+        )])
+
+    navigation = []
+    if offset > 0:
+        navigation.append(InlineKeyboardButton(
+            "◀️",
+            callback_data=f"saved_page:{max(0, offset - SAVED_MEDIA_PAGE_SIZE)}:{uid}",
+        ))
+    if offset + SAVED_MEDIA_PAGE_SIZE < total:
+        navigation.append(InlineKeyboardButton(
+            "▶️",
+            callback_data=f"saved_page:{offset + SAVED_MEDIA_PAGE_SIZE}:{uid}",
+        ))
+    if navigation:
+        keyboard.append(navigation)
+
+    return text, InlineKeyboardMarkup(keyboard) if keyboard else None, total
+
+async def saved_media_command(update, context):
+    user = update.effective_user
+    language = await get_user_language(user.id) or "id"
+    if not await is_premium_active(user.id):
+        await update.message.reply_text(
+            tr(language, "premium_required"),
+            reply_markup=premium_purchase_keyboard(language),
+        )
+        return
+
+    text, reply_markup, total = await render_saved_media_page(
+        user.id,
+        language,
+    )
+    if not total:
+        await update.message.reply_text(
+            tr(language, "saved_empty"),
+            parse_mode="HTML",
+        )
+        return
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=reply_markup,
+    )
+
+async def saved_media_page_callback(update, context):
+    query = update.callback_query
+    try:
+        _, offset, owner_id = query.data.split(":", 2)
+        offset = int(offset)
+        owner_id = int(owner_id)
+    except (AttributeError, TypeError, ValueError):
+        await query.answer(show_alert=True)
+        return
+
+    language = await get_user_language(query.from_user.id) or "id"
+    if query.from_user.id != owner_id:
+        await query.answer(tr(language, "notification_not_yours"), show_alert=True)
+        return
+    if not await is_premium_active(owner_id):
+        await query.answer(tr(language, "premium_required"), show_alert=True)
+        return
+
+    text, reply_markup, total = await render_saved_media_page(
+        owner_id,
+        language,
+        offset=max(0, offset),
+    )
+    await query.answer()
+    if not total:
+        try:
+            await query.message.edit_text(
+                tr(language, "saved_empty"),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        return
+    try:
+        await query.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+    except Exception as e:
+        logger.debug(f"Could not update saved-media page for {owner_id}: {e}")
+
+async def saved_media_open_callback(update, context):
+    query = update.callback_query
+    try:
+        _, saved_id, owner_id = query.data.split(":", 2)
+        saved_id = int(saved_id)
+        owner_id = int(owner_id)
+    except (AttributeError, TypeError, ValueError):
+        await query.answer(show_alert=True)
+        return
+
+    language = await get_user_language(query.from_user.id) or "id"
+    if query.from_user.id != owner_id:
+        await query.answer(tr(language, "notification_not_yours"), show_alert=True)
+        return
+    if not await is_premium_active(owner_id):
+        await query.answer(tr(language, "premium_required"), show_alert=True)
+        return
+
+    saved = await get_saved_media_item(owner_id, saved_id)
+    if not saved:
+        await query.answer(tr(language, "saved_missing"), show_alert=True)
+        return
+
+    await query.answer(tr(language, "saved_open_success"))
+    try:
+        file_id, media_type, caption = saved
         if media_type == "photo":
-            msg = await bot.send_photo(uid, file_id, caption=caption or "")
+            await context.bot.send_photo(owner_id, file_id, caption=caption or "")
         elif media_type == "video":
-            msg = await bot.send_video(uid, file_id, caption=caption or "")
+            await context.bot.send_video(owner_id, file_id, caption=caption or "")
+        else:
+            await context.bot.send_message(owner_id, tr(language, "saved_missing"))
+    except Exception as e:
+        logger.error(f"Could not resend saved media {saved_id} to {owner_id}: {e}")
+        await context.bot.send_message(owner_id, tr(language, "saved_missing"))
+
+async def send_media_item(
+    bot,
+    uid,
+    media_id,
+    file_id,
+    media_type,
+    caption,
+    language,
+    sent_ids,
+):
+    try:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                tr(language, "premium_save_button"),
+                callback_data=f"save_media:{media_id}:{uid}",
+            )
+        ]])
+        if media_type == "photo":
+            msg = await bot.send_photo(
+                uid,
+                file_id,
+                caption=caption or "",
+                reply_markup=keyboard,
+            )
+        elif media_type == "video":
+            msg = await bot.send_video(
+                uid,
+                file_id,
+                caption=caption or "",
+                reply_markup=keyboard,
+            )
         else:
             return
 
@@ -2598,12 +3038,32 @@ async def lifespan(fastapi_app: FastAPI):
             claim_quota_callback,
             pattern=r"^claim_quota:\d{4}-\d{2}-\d{2}:\d+$"
         ))
+        application.add_handler(CallbackQueryHandler(
+            premium_buy_callback,
+            pattern=r"^premium_buy$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            save_received_media_callback,
+            pattern=r"^save_media:\d+:\d+$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            saved_media_page_callback,
+            pattern=r"^saved_page:\d+:\d+$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            saved_media_open_callback,
+            pattern=r"^saved_open:\d+:\d+$"
+        ))
+        application.add_handler(PreCheckoutQueryHandler(premium_pre_checkout))
+        application.add_handler(
+            MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_premium_payment)
+        )
         application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("quota", profile_command))
         application.add_handler(CommandHandler("claim", claim_quota_command))
-        application.add_handler(
-            CommandHandler("set_share_post", set_share_post_command)
-        )
+        application.add_handler(CommandHandler("premium", premium_command))
+        application.add_handler(CommandHandler("saved", saved_media_command))
+        application.add_handler(CommandHandler("paysupport", paysupport_command))
         application.add_handler(CommandHandler("language", language_command))
         application.add_handler(CommandHandler("menu", menu_command))
         application.add_handler(CommandHandler("bc", broadcast_command))
@@ -2648,7 +3108,12 @@ async def lifespan(fastapi_app: FastAPI):
                 return
 
             full_webhook_url = WEBHOOK_URL.rstrip("/") + WEBHOOK_PATH
-            allowed_updates = ["message", "callback_query", "channel_post"]
+            allowed_updates = [
+                "message",
+                "callback_query",
+                "channel_post",
+                "pre_checkout_query",
+            ]
             try:
                 wh = await application.bot.get_webhook_info()
                 if wh.url != full_webhook_url:
@@ -2735,14 +3200,6 @@ async def telegram_webhook(request: Request):
     """Endpoint yang dipanggil Telegram setiap ada update baru."""
     try:
         data = await request.json()
-        channel_post = data.get("channel_post")
-        if channel_post:
-            channel_chat = channel_post.get("chat", {})
-            if (
-                int(channel_chat.get("id", 0)) == CHANNEL_ID
-                and channel_post.get("message_id")
-            ):
-                await save_latest_share_post(channel_post["message_id"])
         update = Update.de_json(data, application.bot)
         await application.process_update(update)
         return Response(content="ok", status_code=200)
