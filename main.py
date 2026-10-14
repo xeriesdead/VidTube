@@ -34,7 +34,7 @@ from telegram import (
 )
 from telegram.error import RetryAfter, Forbidden, BadRequest
 from telegram.ext import (
-    Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler,
+    Application, CallbackQueryHandler, CommandHandler,
     MessageHandler, PreCheckoutQueryHandler, filters
 )
 
@@ -152,8 +152,6 @@ BOT_TEXT = {
         "select_language": "🌐 Pilih bahasa / Select language 👇",
         "language_saved": "✅ Bahasa diatur ke Bahasa Indonesia.",
         "profile_button": "👤 Profil",
-        "claim_button": "🎁 Klaim Kuota",
-        "buy_quota_button": "⭐ Beli +1 Kuota (1 Star)",
         "premium_button": "⭐ Premium (10 Stars)",
         "premium_buy_button": "⭐ Beli Premium · 10 Stars",
         "premium_save_button": "💾 Simpan media",
@@ -167,8 +165,7 @@ BOT_TEXT = {
             "Simpan media yang dikirim melalui bot dan teruskan media yang tidak "
             "dilindungi.\n\n"
             "Harga: <b>10 Telegram Stars</b>\n"
-            "Masa aktif: <b>30 hari</b> sejak pembayaran berhasil. Tidak diperpanjang otomatis.\n"
-            "Premium tidak menambah kuota harian."
+            "Masa aktif: <b>30 hari</b> sejak pembayaran berhasil. Tidak diperpanjang otomatis."
         ),
         "premium_invoice_title": "VidTube Premium 30 Hari",
         "premium_invoice_description": (
@@ -196,11 +193,6 @@ BOT_TEXT = {
         "premium_saved_opened": "Media tersimpan dikirim ulang.",
         "premium_saved_missing": "Media tersimpan tidak ditemukan.",
         "premium_saved_page": "Halaman {page}/{pages}",
-        "share_bonus_removed": (
-            "Forward postingan channel tidak lagi menambah kuota. "
-            "Gunakan /premium untuk menyimpan media, atau /buy_quota untuk membeli "
-            "+1 kuota permanen."
-        ),
         "admin_premium_usage": "Gunakan /set_premium <user_id> <on|off>.",
         "admin_premium_updated": (
             "✅ Status Premium user <code>{user_id}</code> diubah menjadi "
@@ -213,16 +205,12 @@ BOT_TEXT = {
         "welcome": (
             "👋 Halo! Saya bot media sharing.\n\n"
             "Untuk membuka media, tekan link yang diberikan admin.\n\n"
-            f"📢 Join channel: {CHANNEL}\n"
-            "🎁 Gunakan tombol Klaim Kuota untuk kuota harian."
+            f"📢 Join channel: {CHANNEL}"
         ),
         "help": (
             "ℹ️ <b>Panduan Bot</b>\n\n"
             "• Buka media melalui link dari admin.\n"
-            "• Gunakan <b>Profil</b> untuk melihat kuota.\n"
-            "• Tekan <b>Klaim Kuota</b> untuk mengambil 3 kuota harian.\n"
             "• Premium: 10 ⭐ untuk 30 hari, menyimpan media dengan /saved; beli lewat /premium.\n"
-            "• Beli <b>+1 kuota permanen</b> seharga 1 ⭐ dengan /buy_quota.\n"
             "• Gunakan /terms untuk ketentuan dan /paysupport untuk bantuan pembayaran.\n"
             "• Gunakan <b>Bahasa</b> untuk mengganti bahasa."
         ),
@@ -230,35 +218,9 @@ BOT_TEXT = {
         "join_retry": "🔄 Coba Lagi",
         "preparing": "⏳ Media sedang disiapkan. Coba lagi sebentar.",
         "invalid_link": "❌ Link tidak valid atau sudah kedaluwarsa.",
-        "quota_unclaimed": (
-            "🎁 <b>Kuota Belum Diklaim</b>\n\n"
-            "Tekan tombol Klaim Kuota di keyboard untuk membuka file."
-        ),
-        "quota_empty": (
-            "⛔ <b>Kuota Hari Ini Habis</b>\n\n"
-            "Kamu sudah menggunakan semua {total} kuota hari ini. "
-            "Kuota berikutnya tersedia setelah pukul 00.00 WIB.\n\n"
-            "Komentar/reply pada postingan {channel} yang diteruskan ke grup "
-            "diskusi akan mengirim tombol klaim +1 permanen lewat DM. Bonus masuk "
-            "setelah diklaim, satu kali per akun per postingan. Forward channel tidak "
-            "lagi memberi bonus kuota.\n\n"
-            "Premium 10 ⭐ berlaku 30 hari dan memungkinkan penyimpanan media: /premium.\n"
-            "Beli +1 kuota permanen seharga 1 ⭐ lewat /buy_quota."
-        ),
-        "buy_quota_invoice_title": "Kuota Permanen +1",
-        "buy_quota_invoice_description": (
-            "Tambahkan 1 kuota permanen. Saldo ini digunakan setelah kuota harian habis."
-        ),
-        "buy_quota_invoice_label": "+1 kuota permanen",
-        "buy_quota_invoice_failed": "Invoice belum bisa dibuat. Coba lagi nanti.",
-        "buy_quota_checkout_invalid": "Invoice tidak valid atau sudah tidak tersedia. Buat invoice baru dengan /buy_quota.",
-        "buy_quota_paid": (
-            "✅ Pembayaran diterima. +1 kuota permanen sudah ditambahkan.\n"
-            "Saldo kuota permanen: <b>{balance}</b>"
-        ),
-        "buy_quota_payment_review": (
-            "Pembayaran diterima, tetapi kuota belum dapat diverifikasi otomatis. "
-            "Jangan bayar lagi; gunakan /paysupport agar admin memeriksanya."
+        "quota_payment_stopped": (
+            "Pembelian kuota sudah dihentikan. Gunakan /paysupport agar admin "
+            "dapat meninjau pembayaran yang mungkin masih diproses."
         ),
         "payment_support_sent": (
             "✅ Permintaan bantuan pembayaran sudah diteruskan ke admin. "
@@ -270,83 +232,18 @@ BOT_TEXT = {
         ),
         "payment_terms": (
             "<b>Ketentuan pembelian</b>\n\n"
-            "Setiap pembayaran berhasil sebesar 1 Telegram Star menambahkan 1 kuota "
-            "permanen ke akun Anda. Kuota permanen digunakan setelah kuota harian habis.\n\n"
             "Premium berharga 10 Telegram Stars untuk 30 hari, aktif setelah pembayaran "
             "terverifikasi, dan tidak diperpanjang otomatis. Pembelian saat Premium aktif "
             "menambahkan 30 hari dari tanggal kedaluwarsa saat ini.\n\n"
             "Untuk masalah pembayaran, gunakan /paysupport."
         ),
-        "share_post_button": "📢 Buka Channel VidTube",
-        "share_bonus_success": (
-            "✅ Bonus +1 kuota berhasil ditambahkan.\n"
-            "Kuota tersisa: <b>{remaining}/{total}</b>\n"
-            "Bonus hari ini: <b>{bonus_count}/{max_bonus}</b>"
-        ),
-        "share_bonus_duplicate": "Postingan ini sudah memberi bonus untuk akun Anda hari ini.",
-        "share_bonus_daily_limit": "Batas {max_bonus} bonus kuota hari ini sudah tercapai.",
-        "share_bonus_error": "Bonus kuota belum bisa ditambahkan. Coba lagi nanti.",
-        "share_post_wrong_channel": "Teruskan postingan dari channel resmi {channel}.",
-        "share_post_invalid_forward": (
-            "Postingan ini tidak bisa diverifikasi. Gunakan fitur Teruskan "
-            "langsung dari postingan di channel resmi."
-        ),
-        "share_post_seed_usage": (
-            "Balas pesan forward terbaru dari {channel} dengan perintah "
-            "/set_share_post untuk menyinkronkan postingan awal."
-        ),
-        "share_post_saved": "✅ Postingan terbaru untuk bonus kuota sudah disinkronkan.",
-        "claim_success": "✅ 3 kuota berhasil diklaim. Selamat menggunakan!",
-        "claim_already": "Kuota hari ini sudah diklaim.",
-        "admin_quota_usage": "Gunakan /add_quota <jumlah> (1–1000).",
-        "admin_quota_added": (
-            "✅ Berhasil menambahkan {amount} kuota testing.\n"
-            "Sisa kuota hari ini: <b>{remaining}/{total}</b>\n"
-            "Kuota tambahan berlaku sampai pukul 00.00 WIB."
-        ),
-        "admin_quota_error": "Kuota tambahan tidak berhasil disimpan. Coba lagi.",
-        "claim_expired": "Tombol klaim sudah kedaluwarsa. Gunakan /quota untuk kuota hari ini.",
-        "claim_invalid": "Tombol klaim tidak valid.",
-        "claim_not_yours": "Tombol klaim ini bukan milik Anda.",
-        "claim_notification_title": "🎁 <b>Kuota Harian Tersedia</b>",
-        "claim_notification_body": "Klaim 3 kuota untuk membuka hingga 3 link media hari ini.",
-        "claim_notification_button": "🎁 Klaim 3 Kuota",
-        "claim_notification_done": (
-            "✅ <b>Kuota harian berhasil diklaim.</b>\n\n"
-            "Kuota tersisa: <b>{remaining}/{total}</b>"
-        ),
-        "claim_notification_already": "Kuota hari ini sudah diklaim.",
-        "reaction_claim_notification": (
-            "🎉 Komentar/reply pada postingan VidTube terdeteksi.\n\n"
-            "Tekan tombol di bawah untuk mengklaim +1 kuota permanen. "
-            "Bonus masuk ke saldo setelah diklaim."
-        ),
-        "reaction_claim_pending": (
-            "🎉 Ada {count} bonus komentar +1 yang menunggu klaim.\n\n"
-            "Tekan tombol untuk menyimpan setiap bonus ke saldo permanen."
-        ),
-        "reaction_claim_button": "🎁 Klaim +1 · #{post_id}",
-        "reaction_claim_success": "✅ Bonus +1 permanen sudah masuk ke saldo.",
-        "reaction_claim_done": (
-            "✅ <b>Bonus komentar berhasil diklaim.</b>\n"
-            "Saldo bonus postingan: <b>{balance}</b>"
-        ),
-        "reaction_claim_already": "Bonus komentar pada postingan ini sudah diklaim.",
-        "reaction_claim_invalid": "Klaim bonus komentar ini tidak valid atau bukan milik akun Anda.",
         "profile_title": "👤 <b>ACCOUNT</b>",
         "profile_identity": "<b>IDENTITAS AKUN</b>",
-        "profile_status": "<b>STATUS AKUN & KUOTA</b>",
+        "profile_status": "<b>STATUS AKUN</b>",
         "profile_name": "├ NAMA",
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
-        "profile_remaining": "├ TERSISA",
-        "profile_reaction_quota": "├ SALDO KUOTA PERMANEN",
-        "profile_used": "├ TERPAKAI HARI INI",
-        "profile_claim_status": "└ STATUS",
-        "profile_claimed": "Aktif",
-        "profile_unclaimed": "Belum diklaim",
         "profile_total_files": "📂 Total file dibuka",
-        "profile_reset": "⏰ Kuota harian tersedia mulai 00.00 WIB.",
         "media_expiry": "⌛ {count} media akan terhapus otomatis dalam 1 jam.",
         "expired_title": "📌 <b>File Telah Dihapus Otomatis</b>",
         "expired_body": (
@@ -362,8 +259,6 @@ BOT_TEXT = {
         "select_language": "🌐 Pilih bahasa / Select language 👇",
         "language_saved": "✅ Language set to English.",
         "profile_button": "👤 Profile",
-        "claim_button": "🎁 Claim Quota",
-        "buy_quota_button": "⭐ Buy +1 Quota (1 Star)",
         "premium_button": "⭐ Premium (10 Stars)",
         "premium_buy_button": "⭐ Buy Premium · 10 Stars",
         "premium_save_button": "💾 Save media",
@@ -376,8 +271,7 @@ BOT_TEXT = {
             "⭐ <b>VidTube Premium</b>\n\n"
             "Save media sent through the bot and forward media that is not protected.\n\n"
             "Price: <b>10 Telegram Stars</b>\n"
-            "Duration: <b>30 days</b> after successful payment. It does not renew automatically.\n"
-            "Premium does not add daily quota."
+            "Duration: <b>30 days</b> after successful payment. It does not renew automatically."
         ),
         "premium_invoice_title": "VidTube Premium · 30 Days",
         "premium_invoice_description": (
@@ -404,10 +298,6 @@ BOT_TEXT = {
         "premium_saved_opened": "Saved media sent again.",
         "premium_saved_missing": "Saved media was not found.",
         "premium_saved_page": "Page {page}/{pages}",
-        "share_bonus_removed": (
-            "Forwarding channel posts no longer adds quota. Use /premium to save media, "
-            "or /buy_quota to purchase +1 permanent quota."
-        ),
         "admin_premium_usage": "Use /set_premium <user_id> <on|off>.",
         "admin_premium_updated": (
             "✅ Premium status for user <code>{user_id}</code> changed to "
@@ -420,16 +310,12 @@ BOT_TEXT = {
         "welcome": (
             "👋 Hello! I am a media sharing bot.\n\n"
             "Open media using a link shared by the admin.\n\n"
-            f"📢 Join the channel: {CHANNEL}\n"
-            "🎁 Use Claim Quota to claim your daily quota."
+            f"📢 Join the channel: {CHANNEL}"
         ),
         "help": (
             "ℹ️ <b>Bot Guide</b>\n\n"
             "• Open media using a link shared by the admin.\n"
-            "• Use <b>Profile</b> to check your quota.\n"
-            "• Press <b>Claim Quota</b> to claim 3 daily quotas.\n"
             "• Premium: 10 ⭐ for 30 days; save media with /saved and buy with /premium.\n"
-            "• Buy <b>+1 permanent quota</b> for 1 ⭐ with /buy_quota.\n"
             "• Use /terms for purchase terms and /paysupport for payment help.\n"
             "• Use <b>Language</b> to change the bot language."
         ),
@@ -437,35 +323,9 @@ BOT_TEXT = {
         "join_retry": "🔄 Try Again",
         "preparing": "⏳ Media is being prepared. Please try again shortly.",
         "invalid_link": "❌ This link is invalid or has expired.",
-        "quota_unclaimed": (
-            "🎁 <b>Quota Not Claimed</b>\n\n"
-            "Press Claim Quota on the keyboard before opening files."
-        ),
-        "quota_empty": (
-            "⛔ <b>Daily Quota Used</b>\n\n"
-            "You have used all {total} quotas today. Your next quota is available "
-            "after 00:00 WIB.\n\n"
-            "Comment or reply to the auto-forwarded {channel} post in its "
-            "discussion group to get a DM with a +1 permanent quota claim button. "
-            "The bonus is saved after you claim it, once per account per post. "
-            "Forwarding channel posts no longer gives quota.\n\n"
-            "Premium costs 10 ⭐ for 30 days and lets you save media: /premium.\n"
-            "Buy +1 permanent quota for 1 ⭐ with /buy_quota."
-        ),
-        "buy_quota_invoice_title": "Permanent Quota +1",
-        "buy_quota_invoice_description": (
-            "Add 1 permanent quota. It is used after your daily quota runs out."
-        ),
-        "buy_quota_invoice_label": "+1 permanent quota",
-        "buy_quota_invoice_failed": "Could not create the invoice. Please try again later.",
-        "buy_quota_checkout_invalid": "This invoice is invalid or unavailable. Create a new one with /buy_quota.",
-        "buy_quota_paid": (
-            "✅ Payment received. +1 permanent quota has been added.\n"
-            "Permanent quota balance: <b>{balance}</b>"
-        ),
-        "buy_quota_payment_review": (
-            "Payment received, but the quota could not be verified automatically. "
-            "Do not pay again; use /paysupport so an admin can review it."
+        "quota_payment_stopped": (
+            "Quota purchases have been discontinued. Use /paysupport so an admin "
+            "can review any payment that may still be processing."
         ),
         "payment_support_sent": (
             "✅ Your payment support request was sent to the admin. "
@@ -477,83 +337,18 @@ BOT_TEXT = {
         ),
         "payment_terms": (
             "<b>Purchase terms</b>\n\n"
-            "Each successful payment of 1 Telegram Star adds 1 permanent quota to your "
-            "account. Permanent quotas are used after your daily quota runs out.\n\n"
             "Premium costs 10 Telegram Stars for 30 days, starts after payment is "
             "verified, and does not renew automatically. A purchase made while Premium "
             "is active adds 30 days to the current expiry.\n\n"
             "For payment issues, use /paysupport."
         ),
-        "share_post_button": "📢 Open VidTube Channel",
-        "share_bonus_success": (
-            "✅ +1 quota added.\n"
-            "Remaining quota: <b>{remaining}/{total}</b>\n"
-            "Today's bonuses: <b>{bonus_count}/{max_bonus}</b>"
-        ),
-        "share_bonus_duplicate": "This post has already awarded a bonus to your account today.",
-        "share_bonus_daily_limit": "You have reached today's limit of {max_bonus} quota bonuses.",
-        "share_bonus_error": "The quota bonus could not be added. Please try again later.",
-        "share_post_wrong_channel": "Forward a post from the official {channel} channel.",
-        "share_post_invalid_forward": (
-            "This post cannot be verified. Use Telegram's Forward action directly "
-            "on a post in the official channel."
-        ),
-        "share_post_seed_usage": (
-            "Reply to the latest forwarded {channel} post with /set_share_post "
-            "to sync the initial post."
-        ),
-        "share_post_saved": "✅ The latest post for quota bonuses has been synced.",
-        "claim_success": "✅ You claimed 3 quotas. Enjoy!",
-        "claim_already": "Today's quota has already been claimed.",
-        "admin_quota_usage": "Use /add_quota <amount> (1–1000).",
-        "admin_quota_added": (
-            "✅ Added {amount} testing quotas.\n"
-            "Remaining quota today: <b>{remaining}/{total}</b>\n"
-            "Extra quota expires at 00:00 WIB."
-        ),
-        "admin_quota_error": "Could not save the extra quota. Please try again.",
-        "claim_expired": "This claim button has expired. Use /quota to check today's quota.",
-        "claim_invalid": "This claim button is invalid.",
-        "claim_not_yours": "This claim button does not belong to you.",
-        "claim_notification_title": "🎁 <b>Daily Quota Available</b>",
-        "claim_notification_body": "Claim 3 quotas to open up to 3 media links today.",
-        "claim_notification_button": "🎁 Claim 3 Quotas",
-        "claim_notification_done": (
-            "✅ <b>Daily quota claimed.</b>\n\n"
-            "Remaining quota: <b>{remaining}/{total}</b>"
-        ),
-        "claim_notification_already": "Today's quota has already been claimed.",
-        "reaction_claim_notification": (
-            "🎉 Your comment/reply to a VidTube post was detected.\n\n"
-            "Press the button below to claim +1 permanent quota. "
-            "The bonus is added to your balance after you claim it."
-        ),
-        "reaction_claim_pending": (
-            "🎉 You have {count} comment bonus(es) waiting to be claimed.\n\n"
-            "Press a button to save each bonus to your permanent balance."
-        ),
-        "reaction_claim_button": "🎁 Claim +1 · #{post_id}",
-        "reaction_claim_success": "✅ +1 permanent quota was added to your balance.",
-        "reaction_claim_done": (
-            "✅ <b>Comment bonus claimed.</b>\n"
-            "Saved post bonus: <b>{balance}</b>"
-        ),
-        "reaction_claim_already": "The comment bonus for this post has already been claimed.",
-        "reaction_claim_invalid": "This comment bonus claim is invalid or does not belong to your account.",
         "profile_title": "👤 <b>ACCOUNT</b>",
         "profile_identity": "<b>ACCOUNT DETAILS</b>",
-        "profile_status": "<b>ACCOUNT & QUOTA STATUS</b>",
+        "profile_status": "<b>ACCOUNT STATUS</b>",
         "profile_name": "├ NAME",
         "profile_username": "├ USERNAME",
         "profile_user_id": "└ USER ID",
-        "profile_remaining": "├ REMAINING",
-        "profile_reaction_quota": "├ PERMANENT QUOTA BALANCE",
-        "profile_used": "├ USED TODAY",
-        "profile_claim_status": "└ STATUS",
-        "profile_claimed": "Claimed",
-        "profile_unclaimed": "Not claimed",
         "profile_total_files": "📂 Total files opened",
-        "profile_reset": "⏰ Daily quota is available from 00:00 WIB.",
         "media_expiry": "⌛ {count} media item(s) will be deleted automatically in 1 hour.",
         "expired_title": "📌 <b>Media Automatically Deleted</b>",
         "expired_body": (
@@ -581,9 +376,8 @@ def command_keyboard(language):
     text = BOT_TEXT[language]
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton(text["profile_button"]), KeyboardButton(text["claim_button"])],
+            [KeyboardButton(text["profile_button"]), KeyboardButton(text["premium_button"])],
             [KeyboardButton(text["language_button"]), KeyboardButton(text["help_button"])],
-            [KeyboardButton(text["buy_quota_button"]), KeyboardButton(text["premium_button"])],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -662,34 +456,11 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                quota INTEGER NOT NULL DEFAULT 3,
-                quota_date TEXT,
-                admin_quota INTEGER NOT NULL DEFAULT 0,
-                quota_notice_date TEXT,
                 language TEXT,
-                reaction_quota INTEGER NOT NULL DEFAULT 0,
                 is_premium INTEGER NOT NULL DEFAULT 0,
                 premium_until TEXT
             )
         """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS star_quota_payments(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                invoice_payload TEXT NOT NULL,
-                user_id INTEGER NOT NULL,
-                currency TEXT NOT NULL,
-                total_amount INTEGER NOT NULL,
-                status TEXT NOT NULL CHECK(status IN ('pending', 'paid')),
-                telegram_payment_charge_id TEXT UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                paid_at TIMESTAMP
-            )
-        """)
-        c.execute(
-            "CREATE INDEX IF NOT EXISTS idx_star_quota_invoice "
-            "ON star_quota_payments(invoice_payload, user_id, status)"
-        )
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS premium_payments(
@@ -726,95 +497,6 @@ async def init_db():
             "ON saved_media(user_id, saved_at DESC)"
         )
 
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS share_post_state(
-                channel_id INTEGER PRIMARY KEY,
-                latest_message_id INTEGER NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS share_quota_rewards(
-                user_id INTEGER NOT NULL,
-                post_id INTEGER NOT NULL,
-                reward_date TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(user_id, post_id, reward_date)
-            )
-        """)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS reaction_quota_rewards(
-                user_id INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL,
-                post_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(user_id, channel_id, post_id)
-            )
-        """)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS discussion_post_map(
-                discussion_chat_id INTEGER NOT NULL,
-                discussion_message_id INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL,
-                post_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(discussion_chat_id, discussion_message_id)
-            )
-        """)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS reaction_quota_claims(
-                user_id INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL,
-                post_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                notified_at TIMESTAMP,
-                claimed_at TIMESTAMP,
-                PRIMARY KEY(user_id, channel_id, post_id)
-            )
-        """)
-        c.execute(
-            "CREATE INDEX IF NOT EXISTS idx_reaction_claims_pending "
-            "ON reaction_quota_claims(user_id, channel_id, claimed_at, notified_at)"
-        )
-        reward_columns = c.execute(
-            "PRAGMA table_info(share_quota_rewards)"
-        ).fetchall()
-        reward_primary_key = [
-            column_name
-            for _, column_name in sorted(
-                (row[5], row[1]) for row in reward_columns if row[5]
-            )
-        ]
-        if reward_primary_key != ["user_id", "post_id", "reward_date"]:
-            # Preserve old claims but let the same post reward the user again
-            # on a different day.
-            c.execute("DROP TABLE IF EXISTS share_quota_rewards_migration")
-            c.execute("""
-                CREATE TABLE share_quota_rewards_migration(
-                    user_id INTEGER NOT NULL,
-                    post_id INTEGER NOT NULL,
-                    reward_date TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY(user_id, post_id, reward_date)
-                )
-            """)
-            c.execute("""
-                INSERT OR IGNORE INTO share_quota_rewards_migration
-                    (user_id, post_id, reward_date, created_at)
-                SELECT user_id, post_id, reward_date, created_at
-                FROM share_quota_rewards
-            """)
-            c.execute("DROP TABLE share_quota_rewards")
-            c.execute(
-                "ALTER TABLE share_quota_rewards_migration "
-                "RENAME TO share_quota_rewards"
-            )
-        c.execute(
-            "CREATE INDEX IF NOT EXISTS idx_share_rewards_user_date "
-            "ON share_quota_rewards(user_id, reward_date)"
-        )
-
         existing_cols = [row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()]
         if "username" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN username TEXT")
@@ -822,28 +504,9 @@ async def init_db():
         if "joined_at" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN joined_at TIMESTAMP")
             logger.info("✅ Migrated users table: added joined_at column")
-        if "quota" not in existing_cols:
-            c.execute("ALTER TABLE users ADD COLUMN quota INTEGER NOT NULL DEFAULT 3")
-            logger.info("✅ Migrated users table: added quota column")
-        if "quota_date" not in existing_cols:
-            c.execute("ALTER TABLE users ADD COLUMN quota_date TEXT")
-            logger.info("✅ Migrated users table: added quota_date column")
-        if "admin_quota" not in existing_cols:
-            c.execute(
-                "ALTER TABLE users ADD COLUMN admin_quota INTEGER NOT NULL DEFAULT 0"
-            )
-            logger.info("✅ Migrated users table: added admin_quota column")
-        if "quota_notice_date" not in existing_cols:
-            c.execute("ALTER TABLE users ADD COLUMN quota_notice_date TEXT")
-            logger.info("✅ Migrated users table: added quota_notice_date column")
         if "language" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN language TEXT")
             logger.info("✅ Migrated users table: added language column")
-        if "reaction_quota" not in existing_cols:
-            c.execute(
-                "ALTER TABLE users ADD COLUMN reaction_quota INTEGER NOT NULL DEFAULT 0"
-            )
-            logger.info("✅ Migrated users table: added reaction_quota column")
         if "is_premium" not in existing_cols:
             c.execute(
                 "ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0"
@@ -852,13 +515,6 @@ async def init_db():
         if "premium_until" not in existing_cols:
             c.execute("ALTER TABLE users ADD COLUMN premium_until TEXT")
             logger.info("✅ Migrated users table: added premium_until column")
-
-        # Give existing accounts their initial daily quota when this feature is
-        # first enabled. Later days require the user to claim the notification.
-        c.execute(
-            "UPDATE users SET quota_date=? WHERE quota_date IS NULL OR quota_date=''",
-            (datetime.now(WIB).date().isoformat(),)
-        )
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS backup_log(
@@ -918,12 +574,10 @@ def gen_code(length=10):
 
 async def save_user(uid, username=None):
     try:
-        today = datetime.now(WIB).date().isoformat()
         await db_pool.execute_write(
             "INSERT OR IGNORE INTO users "
-            "(user_id, username, quota, quota_date, language) "
-            "VALUES (?, ?, ?, ?, NULL)",
-            (uid, username, DAILY_QUOTA, today)
+            "(user_id, username, language) VALUES (?, ?, NULL)",
+            (uid, username)
         )
     except Exception as e:
         logger.error(f"Error saving user: {e}")
@@ -2071,77 +1725,6 @@ async def menu_command(update, context):
         reply_markup=command_keyboard(language)
     )
 
-async def claim_quota_command(update, context):
-    user = update.effective_user
-    await save_user(user.id, user.username or "unknown")
-    language = await get_user_language(user.id) or "id"
-    today = datetime.now(WIB).date().isoformat()
-    claimed, _ = await claim_daily_quota(user.id, today)
-    await update.message.reply_text(
-        tr(language, "claim_success" if claimed else "claim_already"),
-        reply_markup=command_keyboard(language)
-    )
-
-async def send_star_quota_invoice(bot, user, language):
-    payload = f"permanent-quota:{user.id}:{secrets.token_urlsafe(18)}"
-    try:
-        await create_star_quota_invoice(user.id, payload)
-        await bot.send_invoice(
-            chat_id=user.id,
-            title=tr(language, "buy_quota_invoice_title"),
-            description=tr(language, "buy_quota_invoice_description"),
-            payload=payload,
-            provider_token="",
-            currency="XTR",
-            prices=[
-                LabeledPrice(
-                    tr(language, "buy_quota_invoice_label"),
-                    TELEGRAM_STARS_PER_QUOTA,
-                )
-            ],
-            start_parameter="buy_permanent_quota",
-        )
-        return True
-    except Exception:
-        logger.exception("Could not send Stars quota invoice for user=%s", user.id)
-        return False
-
-async def buy_quota_command(update, context):
-    user = update.effective_user
-    language = await get_user_language(user.id) or "id"
-    if not update.effective_chat or update.effective_chat.type != "private":
-        await update.effective_message.reply_text(
-            tr(language, "buy_quota_invoice_failed")
-        )
-        return
-
-    await save_user(user.id, user.username or "unknown")
-    sent = await send_star_quota_invoice(context.bot, user, language)
-    if not sent:
-        await update.effective_message.reply_text(
-            tr(language, "buy_quota_invoice_failed")
-        )
-
-async def buy_quota_callback(update, context):
-    query = update.callback_query
-    user = query.from_user
-    language = await get_user_language(user.id) or "id"
-    if not query.message or query.message.chat.type != "private":
-        await query.answer(
-            tr(language, "buy_quota_invoice_failed"),
-            show_alert=True,
-        )
-        return
-
-    await query.answer()
-    await save_user(user.id, user.username or "unknown")
-    sent = await send_star_quota_invoice(context.bot, user, language)
-    if not sent:
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=tr(language, "buy_quota_invoice_failed"),
-        )
-
 def premium_purchase_keyboard(language):
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(
@@ -2218,28 +1801,17 @@ async def pre_checkout_query_handler(update, context):
     user_id = query.from_user.id
     is_premium_invoice = (query.invoice_payload or "").startswith("premium:")
     try:
-        if is_premium_invoice:
-            valid = (
-                query.currency == "XTR"
-                and query.total_amount == TELEGRAM_STARS_PER_PREMIUM
-                and await validate_premium_invoice(
-                    user_id,
-                    query.invoice_payload,
-                    query.total_amount,
-                    query.currency,
-                )
+        valid = (
+            is_premium_invoice
+            and query.currency == "XTR"
+            and query.total_amount == TELEGRAM_STARS_PER_PREMIUM
+            and await validate_premium_invoice(
+                user_id,
+                query.invoice_payload,
+                query.total_amount,
+                query.currency,
             )
-        else:
-            valid = (
-                query.currency == "XTR"
-                and query.total_amount == TELEGRAM_STARS_PER_QUOTA
-                and await validate_star_quota_invoice(
-                    user_id,
-                    query.invoice_payload,
-                    query.total_amount,
-                    query.currency,
-                )
-            )
+        )
     except Exception:
         logger.exception("Could not validate Stars pre-checkout for user=%s", user_id)
         valid = False
@@ -2249,10 +1821,10 @@ async def pre_checkout_query_handler(update, context):
         language = await get_user_language(user_id) or "id"
         await query.answer(
             ok=False,
-            error_message=tr(
-                language,
-                "premium_checkout_invalid" if is_premium_invoice
-                else "buy_quota_checkout_invalid",
+            error_message=(
+                tr(language, "premium_checkout_invalid")
+                if is_premium_invoice
+                else tr(language, "quota_payment_stopped")
             ),
         )
 
@@ -2307,41 +1879,12 @@ async def successful_payment_handler(update, context):
             await message.reply_text(tr(language, "premium_payment_review"))
         return
 
-    if payment.currency != "XTR" or payment.total_amount != TELEGRAM_STARS_PER_QUOTA:
-        logger.error(
-            "Unexpected Stars payment amount/currency for user=%s amount=%s currency=%s",
-            user.id,
-            payment.total_amount,
-            payment.currency,
-        )
-        await message.reply_text(tr(language, "buy_quota_payment_review"))
-        return
-
-    try:
-        status, balance = await record_star_quota_payment(
-            user.id,
-            payment.invoice_payload,
-            payment.telegram_payment_charge_id,
-            payment.total_amount,
-            payment.currency,
-        )
-    except Exception:
-        logger.exception("Could not record Stars payment for user=%s", user.id)
-        await message.reply_text(tr(language, "buy_quota_payment_review"))
-        return
-
-    if status in ("success", "already"):
-        await message.reply_text(
-            tr(language, "buy_quota_paid", balance=balance),
-            parse_mode="HTML",
-            reply_markup=command_keyboard(language),
-        )
-    else:
-        logger.error(
-            "Could not match a successful Stars payment to an invoice for user=%s",
-            user.id,
-        )
-        await message.reply_text(tr(language, "buy_quota_payment_review"))
+    logger.warning(
+        "Ignoring successful payment for a discontinued purchase: user=%s payload=%s",
+        user.id,
+        payment.invoice_payload,
+    )
+    await message.reply_text(tr(language, "quota_payment_stopped"))
 
 async def payment_support_command(update, context):
     user = update.effective_user
@@ -2589,47 +2132,6 @@ async def saved_media_open_callback(update, context):
         )
         await query.answer(tr(language, "premium_saved_missing"), show_alert=True)
 
-async def add_quota_command(update, context):
-    user = update.effective_user
-    if not is_admin(user.id):
-        await update.message.reply_text("❌ Admin only")
-        return
-
-    language = await get_user_language(user.id) or "id"
-    if len(context.args) != 1:
-        await update.message.reply_text(tr(language, "admin_quota_usage"))
-        return
-
-    try:
-        amount = int(context.args[0])
-    except (TypeError, ValueError):
-        amount = 0
-
-    if not 1 <= amount <= MAX_ADMIN_QUOTA_PER_COMMAND:
-        await update.message.reply_text(tr(language, "admin_quota_usage"))
-        return
-
-    await save_user(user.id, user.username or "unknown")
-    today = datetime.now(WIB).date().isoformat()
-    grant = await grant_admin_quota(user.id, amount, today)
-    if not grant:
-        await update.message.reply_text(tr(language, "admin_quota_error"))
-        return
-
-    remaining, admin_quota = grant
-    share_bonus_count = await get_share_bonus_count(user.id, today)
-    total = DAILY_QUOTA + share_bonus_count + admin_quota
-    await update.message.reply_text(
-        tr(
-            language,
-            "admin_quota_added",
-            amount=amount,
-            remaining=remaining,
-            total=total,
-        ),
-        parse_mode="HTML",
-    )
-
 async def set_premium_command(update, context):
     user = update.effective_user
     if not is_admin(user.id):
@@ -2684,8 +2186,6 @@ async def menu_text_handler(update, context):
     for language in BOT_TEXT:
         for candidate, key in (
             ("profile", "profile_button"),
-            ("claim", "claim_button"),
-            ("buy_quota", "buy_quota_button"),
             ("premium", "premium_button"),
             ("language", "language_button"),
             ("help", "help_button"),
@@ -2698,10 +2198,6 @@ async def menu_text_handler(update, context):
 
     if action == "profile":
         await profile_command(update, context)
-    elif action == "claim":
-        await claim_quota_command(update, context)
-    elif action == "buy_quota":
-        await buy_quota_command(update, context)
     elif action == "premium":
         await premium_command(update, context)
     elif action == "language":
@@ -2718,10 +2214,7 @@ async def register_bot_commands(bot):
     command_sets = {
         "id": [
             BotCommand("start", "Mulai bot"),
-            BotCommand("profile", "Lihat profil dan kuota"),
-            BotCommand("quota", "Lihat kuota harian"),
-            BotCommand("claim", "Klaim kuota harian"),
-            BotCommand("buy_quota", "Beli +1 kuota permanen (1 Star)"),
+            BotCommand("profile", "Lihat profil"),
             BotCommand("premium", "Beli Premium 30 hari (10 Stars)"),
             BotCommand("saved", "Buka media tersimpan"),
             BotCommand("terms", "Ketentuan pembelian"),
@@ -2731,10 +2224,7 @@ async def register_bot_commands(bot):
         ],
         "en": [
             BotCommand("start", "Start the bot"),
-            BotCommand("profile", "View profile and quota"),
-            BotCommand("quota", "View daily quota"),
-            BotCommand("claim", "Claim daily quota"),
-            BotCommand("buy_quota", "Buy +1 permanent quota (1 Star)"),
+            BotCommand("profile", "View profile"),
             BotCommand("premium", "Buy Premium for 30 days (10 Stars)"),
             BotCommand("saved", "Open saved media"),
             BotCommand("terms", "Purchase terms"),
@@ -2759,15 +2249,6 @@ async def start_command(update, context):
     username = update.effective_user.username or "unknown"
 
     await save_user(uid, username)
-    if update.effective_chat and update.effective_chat.type == "private":
-        try:
-            await send_pending_reaction_claims(context.bot, uid)
-        except Exception as e:
-            logger.warning(
-                "Could not deliver pending post-bonus claims after /start for user=%s: %s",
-                uid,
-                e,
-            )
     language = await get_user_language(uid) or "id"
     logger.info(f"👤 User {username} ({uid}) started bot")
 
@@ -2815,45 +2296,6 @@ async def start_command(update, context):
         return
 
     premium = await is_premium_user(uid)
-    quota_date = datetime.now(WIB).date().isoformat()
-    consumed, _, quota_source = await consume_daily_quota(uid, quota_date)
-    if not consumed:
-        _, claimed_today = await get_daily_quota(uid, quota_date)
-        reply_markup = None
-        if not claimed_today:
-            reply_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    tr(language, "claim_notification_button"),
-                    callback_data=f"claim_quota:{quota_date}:{uid}"
-                )
-            ]])
-            message = tr(language, "quota_unclaimed")
-        else:
-            bonus_count = await get_share_bonus_count(uid, quota_date)
-            admin_quota = await get_admin_quota_count(uid, quota_date)
-            message = tr(
-                language,
-                "quota_empty",
-                total=DAILY_QUOTA + bonus_count + admin_quota,
-                max_bonus=MAX_SHARE_BONUSES_PER_DAY,
-                channel=CHANNEL,
-            )
-            reply_markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton(
-                    tr(language, "premium_buy_button"),
-                    callback_data="premium_buy",
-                )],
-                [InlineKeyboardButton(
-                    tr(language, "buy_quota_button"),
-                    callback_data="buy_quota",
-                )],
-            ])
-        await update.message.reply_text(
-            message,
-            parse_mode="HTML",
-            reply_markup=reply_markup
-        )
-        return
 
     context.application.create_task(increment_clicks(code))
     context.application.create_task(log_link_access(code, uid, username))
@@ -2868,9 +2310,6 @@ async def start_command(update, context):
         send_tasks.append(task)
 
     await asyncio.gather(*send_tasks, return_exceptions=True)
-
-    if not sent_ids:
-        await refund_daily_quota(uid, quota_date, quota_source)
 
     if sent_ids:
         media_message_ids = list(sent_ids)
@@ -2933,60 +2372,9 @@ async def start_command(update, context):
 
         context.application.create_task(delete_later())
 
-async def set_share_post_command(update, context):
-    user = update.effective_user
-    language = await get_user_language(user.id) or "id"
-    if not is_admin(user.id):
-        await update.message.reply_text("❌ Admin only")
-        return
-
-    forwarded_message = update.message.reply_to_message
-    forwarded_post = (
-        get_forwarded_channel_post(forwarded_message)
-        if forwarded_message else None
-    )
-    if not forwarded_post:
-        await update.message.reply_text(
-            tr(language, "share_post_seed_usage", channel=CHANNEL)
-        )
-        return
-
-    source_chat_id, post_id = forwarded_post
-    if source_chat_id != CHANNEL_ID or not post_id:
-        await update.message.reply_text(
-            tr(language, "share_post_wrong_channel", channel=CHANNEL)
-        )
-        return
-
-    await save_latest_share_post(post_id)
-    latest_post_id = await get_latest_share_post_id()
-    await update.message.reply_text(
-        tr(language, "share_post_saved"),
-        reply_markup=share_post_keyboard(latest_post_id, language),
-    )
-
-async def handle_share_forward(update, context):
-    message = update.message
-    user = update.effective_user
-    if not message or not user:
-        return
-
-    forwarded_post = get_forwarded_channel_post(message)
-    if not forwarded_post:
-        return
-
-    language = await get_user_language(user.id) or "id"
-    await message.reply_text(tr(language, "share_bonus_removed"))
-    raise ApplicationHandlerStop
-
 async def build_profile_message(user):
     uid = user.id
     language = await get_user_language(uid) or "id"
-    today = datetime.now(WIB).date().isoformat()
-    remaining, claimed_today = await get_daily_quota(uid, today)
-    bonus_count = await get_share_bonus_count(uid, today)
-    admin_quota = await get_admin_quota_count(uid, today)
-    total_quota = DAILY_QUOTA + bonus_count + admin_quota
     total_files = await db_pool.execute_read(
         """
         SELECT COUNT(m.id)
@@ -2998,14 +2386,8 @@ async def build_profile_message(user):
         fetch_one=True
     )
     total_files = total_files[0] if total_files else 0
-    used_today = total_quota - remaining if claimed_today else 0
-
     name = html_escape(user.full_name or "Pengguna")
     username = f"@{html_escape(user.username)}" if user.username else "-"
-    claim_status = tr(
-        language,
-        "profile_claimed" if claimed_today else "profile_unclaimed"
-    )
     premium_active = await is_premium_user(uid)
     premium_expiry = await get_premium_expiry(uid)
     premium_status = tr(
@@ -3020,15 +2402,9 @@ async def build_profile_message(user):
         )
     elif premium_active:
         premium_status = tr(language, "premium_no_expiry")
-    quota_status = (
+    account_status = (
         f"{tr(language, 'profile_premium')}: <b>{premium_status}</b>"
-        f"{premium_expiry_line}\n"
-        f"{tr(language, 'profile_remaining')}: <b>{remaining}/{total_quota}</b>\n"
-        f"{tr(language, 'profile_reaction_quota')}: "
-        f"<b>{await get_reaction_quota(uid)}</b>\n"
-        f"{tr(language, 'profile_used')}: <b>{used_today}</b>\n"
-        f"{tr(language, 'profile_claim_status')}: <b>{claim_status}</b>\n"
-        f"{tr(language, 'profile_reset')}"
+        f"{premium_expiry_line}"
     )
 
     text = (
@@ -3039,22 +2415,10 @@ async def build_profile_message(user):
         f"{tr(language, 'profile_username')}: {username}\n"
         f"{tr(language, 'profile_user_id')}: <code>{uid}</code>\n\n"
         f"{tr(language, 'profile_status')}\n"
-        f"{quota_status}\n\n"
+        f"{account_status}\n\n"
         f"{tr(language, 'profile_total_files')}: <b>{total_files}</b>"
     )
-
-    keyboard_rows = []
-    if not claimed_today:
-        keyboard_rows.append([InlineKeyboardButton(
-            tr(language, "claim_notification_button"),
-            callback_data=f"claim_quota:{today}:{uid}"
-        )])
-    keyboard_rows.append([InlineKeyboardButton(
-        tr(language, "buy_quota_button"),
-        callback_data="buy_quota",
-    )])
-
-    reply_markup = InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
+    reply_markup = premium_purchase_keyboard(language) if not premium_active else None
     return text, reply_markup
 
 async def profile_command(update, context):
@@ -3066,116 +2430,6 @@ async def profile_command(update, context):
         parse_mode="HTML",
         reply_markup=reply_markup
     )
-
-async def claim_quota_callback(update, context):
-    query = update.callback_query
-    language = await get_user_language(query.from_user.id) or "id"
-    try:
-        _, claim_date, owner_id = query.data.split(":", 2)
-        owner_id = int(owner_id)
-    except (AttributeError, TypeError, ValueError):
-        await query.answer(tr(language, "claim_invalid"), show_alert=True)
-        return
-
-    if query.from_user.id != owner_id:
-        await query.answer(tr(language, "claim_not_yours"), show_alert=True)
-        return
-
-    today = datetime.now(WIB).date().isoformat()
-    if claim_date != today:
-        await query.answer(
-            tr(language, "claim_expired"),
-            show_alert=True
-        )
-        return
-
-    await save_user(owner_id, query.from_user.username or "unknown")
-    claimed, remaining = await claim_daily_quota(owner_id, today)
-    if claimed:
-        await query.answer(tr(language, "claim_success"))
-    else:
-        await query.answer(tr(language, "claim_notification_already"), show_alert=True)
-
-    if query.message:
-        if query.message.text and "ACCOUNT" in query.message.text:
-            text, reply_markup = await build_profile_message(query.from_user)
-        else:
-            language = await get_user_language(owner_id) or "id"
-            text = tr(
-                language,
-                "claim_notification_done",
-                remaining=remaining,
-                total=DAILY_QUOTA,
-            )
-            reply_markup = None
-        try:
-            await query.message.edit_text(
-                text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
-        except Exception as e:
-            logger.debug(f"Could not update quota claim message: {e}")
-
-
-async def reaction_quota_claim_callback(update, context):
-    query = update.callback_query
-    user_id = query.from_user.id
-    language = await get_user_language(user_id) or "id"
-    try:
-        prefix, post_id_text = query.data.split(":", 1)
-        post_id = int(post_id_text)
-        if prefix != "reaction_claim" or post_id <= 0:
-            raise ValueError("invalid claim payload")
-    except (AttributeError, TypeError, ValueError):
-        await query.answer(
-            tr(language, "reaction_claim_invalid"),
-            show_alert=True,
-        )
-        return
-
-    status, balance = await claim_reaction_quota(user_id, post_id)
-    if status == "invalid":
-        await query.answer(
-            tr(language, "reaction_claim_invalid"),
-            show_alert=True,
-        )
-        return
-    if status == "already":
-        await query.answer(
-            tr(language, "reaction_claim_already"),
-            show_alert=True,
-        )
-    else:
-        await query.answer(tr(language, "reaction_claim_success"))
-
-    if not query.message:
-        return
-
-    current_markup = query.message.reply_markup
-    remaining_rows = []
-    if current_markup:
-        for row in current_markup.inline_keyboard:
-            remaining = [
-                button for button in row
-                if button.callback_data != query.data
-            ]
-            if remaining:
-                remaining_rows.append(remaining)
-
-    try:
-        if remaining_rows:
-            await query.message.edit_reply_markup(
-                reply_markup=InlineKeyboardMarkup(remaining_rows)
-            )
-        else:
-            await query.message.edit_text(
-                tr(language, "reaction_claim_done", balance=balance),
-                parse_mode="HTML",
-            )
-    except Exception as e:
-        logger.debug(f"Could not update reaction claim message: {e}")
-
 
 async def close_expired_notification(update, context):
     query = update.callback_query
@@ -3717,93 +2971,6 @@ async def run_schedule_tick():
 
     except Exception as e:
         logger.error(f"Schedule tick error: {e}")
-
-async def notify_daily_quota_claims(bot):
-    """Kirim tombol klaim kuota pada hari WIB baru melalui cron."""
-    today = datetime.now(WIB).date().isoformat()
-    try:
-        users = await db_pool.execute_read(
-            "SELECT user_id FROM users "
-            "WHERE (quota_date IS NULL OR quota_date<>?) "
-            "AND (quota_notice_date IS NULL OR quota_notice_date<>?) "
-            "ORDER BY user_id",
-            (today, today)
-        )
-
-        for (user_id,) in users:
-            _, claimed_today = await get_daily_quota(user_id, today)
-            if claimed_today:
-                await db_pool.execute_write(
-                    "UPDATE users SET quota_notice_date=? WHERE user_id=?",
-                    (today, user_id)
-                )
-                continue
-
-            language = await get_user_language(user_id) or "id"
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    tr(language, "claim_notification_button"),
-                    callback_data=f"claim_quota:{today}:{user_id}"
-                )
-            ]])
-            notification = (
-                f"{tr(language, 'claim_notification_title')}\n\n"
-                f"{tr(language, 'claim_notification_body')}"
-            )
-            try:
-                await bot.send_message(
-                    user_id,
-                    notification,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
-            except RetryAfter as e:
-                await asyncio.sleep(float(e.retry_after) + 1)
-                try:
-                    await bot.send_message(
-                        user_id,
-                        notification,
-                        parse_mode="HTML",
-                        reply_markup=keyboard
-                    )
-                except (Forbidden, BadRequest) as retry_error:
-                    logger.info(
-                        f"Could not notify quota claim for {user_id}: {retry_error}"
-                    )
-                    await db_pool.execute_write(
-                        "UPDATE users SET quota_notice_date=? WHERE user_id=?",
-                        (today, user_id)
-                    )
-                    continue
-                except Exception as retry_error:
-                    logger.warning(
-                        f"Quota claim notification retry failed for {user_id}: "
-                        f"{retry_error}"
-                    )
-                    continue
-            except (Forbidden, BadRequest) as e:
-                logger.info(f"Could not notify quota claim for {user_id}: {e}")
-                await db_pool.execute_write(
-                    "UPDATE users SET quota_notice_date=? WHERE user_id=?",
-                    (today, user_id)
-                )
-                continue
-            except Exception as e:
-                logger.warning(f"Quota claim notification failed for {user_id}: {e}")
-                continue
-
-            await db_pool.execute_write(
-                "UPDATE users SET quota_notice_date=? WHERE user_id=?",
-                (today, user_id)
-            )
-            await asyncio.sleep(0.05)
-
-        if users:
-            logger.info(
-                f"🎁 Sent daily quota claim notifications for {len(users)} pending users"
-            )
-    except Exception as e:
-        logger.error(f"Daily quota notification task failed: {e}", exc_info=True)
 
 # ===== BACKUP =====
 
@@ -4448,25 +3615,9 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_error_handler(error_handler)
 
         application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(
-            MessageHandler(filters.ALL, handle_share_forward),
-            group=-1,
-        )
-        application.add_handler(CallbackQueryHandler(
-            reaction_quota_claim_callback,
-            pattern=r"^reaction_claim:\d+$"
-        ))
         application.add_handler(CallbackQueryHandler(
             close_expired_notification,
             pattern=r"^expired_close:\d+$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            claim_quota_callback,
-            pattern=r"^claim_quota:\d{4}-\d{2}-\d{2}:\d+$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            buy_quota_callback,
-            pattern=r"^buy_quota$",
         ))
         application.add_handler(CallbackQueryHandler(
             premium_buy_callback,
@@ -4489,14 +3640,10 @@ async def lifespan(fastapi_app: FastAPI):
             MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler)
         )
         application.add_handler(CommandHandler("profile", profile_command))
-        application.add_handler(CommandHandler("quota", profile_command))
-        application.add_handler(CommandHandler("claim", claim_quota_command))
-        application.add_handler(CommandHandler("buy_quota", buy_quota_command))
         application.add_handler(CommandHandler("premium", premium_command))
         application.add_handler(CommandHandler("saved", saved_media_command))
         application.add_handler(CommandHandler("terms", terms_command))
         application.add_handler(CommandHandler("paysupport", payment_support_command))
-        application.add_handler(CommandHandler("add_quota", add_quota_command))
         application.add_handler(CommandHandler("set_premium", set_premium_command))
         application.add_handler(CommandHandler("language", language_command))
         application.add_handler(CommandHandler("menu", menu_command))
@@ -4545,7 +3692,6 @@ async def lifespan(fastapi_app: FastAPI):
             allowed_updates = [
                 "message",
                 "callback_query",
-                "channel_post",
                 "pre_checkout_query",
             ]
             try:
@@ -4644,22 +3790,6 @@ async def telegram_webhook(request: Request):
 
     try:
         data = await request.json()
-        message = data.get("message")
-        if message:
-            await save_discussion_post_mapping(message)
-            await handle_discussion_comment(message, application.bot)
-        channel_post = data.get("channel_post")
-        if channel_post:
-            channel_chat = channel_post.get("chat", {})
-            if (
-                int(channel_chat.get("id", 0)) == CHANNEL_ID
-                and channel_post.get("message_id")
-            ):
-                await save_latest_share_post(channel_post["message_id"])
-        if "message_reaction" in data or "message_reaction_count" in data:
-            # Ignore reactions from old pending updates after switching to
-            # identifiable user comments as the quota trigger.
-            return Response(content="ok", status_code=200)
         update = Update.de_json(data, application.bot)
         await application.process_update(update)
         return Response(content="ok", status_code=200)
@@ -4672,17 +3802,9 @@ async def telegram_webhook(request: Request):
 async def cron_endpoint():
     """
     Endpoint untuk cron-job.org — hit setiap 5 menit.
-    Menjalankan: cek backup, schedule broadcast, dan klaim kuota harian WIB.
+    Menjalankan backup dan broadcast terjadwal.
     """
-    global _daily_quota_notice_task
     try:
-        if application and (
-            _daily_quota_notice_task is None or _daily_quota_notice_task.done()
-        ):
-            _daily_quota_notice_task = application.create_task(
-                notify_daily_quota_claims(application.bot)
-            )
-
         await asyncio.gather(
             maybe_run_backup(),
             run_schedule_tick(),
