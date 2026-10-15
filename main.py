@@ -193,6 +193,20 @@ BOT_TEXT = {
             "<b>{status}</b>."
         ),
         "admin_premium_error": "Status Premium tidak berhasil disimpan. Coba lagi.",
+        "admin_premium_grant_usage": (
+            "Gunakan /grant_premium <user_id> [hari]. Default 30 hari; "
+            "masukkan 1–3650 hari."
+        ),
+        "admin_premium_grant_success": (
+            "✅ Premium manual untuk user <code>{user_id}</code> aktif sampai "
+            "<b>{premium_until}</b> WIB. Ditambahkan {days} hari."
+        ),
+        "admin_premium_grant_permanent": (
+            "User <code>{user_id}</code> sudah memiliki Premium permanen."
+        ),
+        "admin_premium_grant_error": (
+            "Premium manual tidak berhasil disimpan. Coba lagi."
+        ),
         "language_button": "🌐 Bahasa",
         "help_button": "ℹ️ Bantuan",
         "menu_placeholder": "Pilih menu bot",
@@ -302,6 +316,20 @@ BOT_TEXT = {
             "<b>{status}</b>."
         ),
         "admin_premium_error": "Could not save the Premium status. Please try again.",
+        "admin_premium_grant_usage": (
+            "Use /grant_premium <user_id> [days]. Defaults to 30 days; "
+            "enter 1–3650 days."
+        ),
+        "admin_premium_grant_success": (
+            "✅ Manual Premium for user <code>{user_id}</code> is active until "
+            "<b>{premium_until}</b> WIB. Added {days} days."
+        ),
+        "admin_premium_grant_permanent": (
+            "User <code>{user_id}</code> already has permanent Premium."
+        ),
+        "admin_premium_grant_error": (
+            "Could not save manual Premium. Please try again."
+        ),
         "language_button": "🌐 Language",
         "help_button": "ℹ️ Help",
         "menu_placeholder": "Choose a bot menu",
@@ -637,6 +665,47 @@ async def set_user_premium(uid, enabled):
     except Exception as e:
         logger.error(f"Error setting Premium status for {uid}: {e}")
         return False
+
+async def grant_premium_period(uid, days):
+    now = datetime.now(timezone.utc)
+    async with db_pool.write_lock:
+        conn = await db_pool.get()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT is_premium, premium_until FROM users WHERE user_id=?",
+                (uid,),
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                conn.rollback()
+                return "permanent", None
+
+            current_expiry = parse_premium_expiry(row[1]) if row else None
+            base = (
+                current_expiry
+                if current_expiry and current_expiry > now
+                else now
+            )
+            premium_until = base + timedelta(days=days)
+            premium_until_text = premium_until.isoformat(timespec="seconds")
+            cursor.execute(
+                """
+                INSERT INTO users (user_id, is_premium, premium_until)
+                VALUES (?, 0, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    is_premium=0,
+                    premium_until=excluded.premium_until
+                """,
+                (uid, premium_until_text),
+            )
+            conn.commit()
+            return "success", premium_until
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            await db_pool.put(conn)
 
 async def create_premium_invoice_record(uid, payload):
     await db_pool.execute_write(
@@ -1421,6 +1490,80 @@ async def set_premium_command(update, context):
             "admin_premium_updated",
             user_id=target_id,
             status=tr(language, "premium_active" if is_enabled else "premium_inactive"),
+        ),
+        parse_mode="HTML",
+    )
+
+async def grant_premium_command(update, context):
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Admin only")
+        return
+
+    language = await get_user_language(user.id) or "id"
+    args = context.args or []
+    if len(args) not in (1, 2):
+        await update.message.reply_text(
+            tr(language, "admin_premium_grant_usage")
+        )
+        return
+
+    try:
+        target_id = int(args[0])
+        days = int(args[1]) if len(args) == 2 else PREMIUM_DURATION_DAYS
+    except (TypeError, ValueError):
+        target_id, days = 0, 0
+    if target_id <= 0 or not 1 <= days <= 3650:
+        await update.message.reply_text(
+            tr(language, "admin_premium_grant_usage")
+        )
+        return
+
+    try:
+        status, expiry = await grant_premium_period(target_id, days)
+    except Exception:
+        logger.exception(
+            "Could not grant manual Premium: admin=%s user=%s days=%s",
+            user.id,
+            target_id,
+            days,
+        )
+        await update.message.reply_text(
+            tr(language, "admin_premium_grant_error")
+        )
+        return
+
+    if status == "permanent":
+        await update.message.reply_text(
+            tr(
+                language,
+                "admin_premium_grant_permanent",
+                user_id=target_id,
+            ),
+            parse_mode="HTML",
+        )
+        return
+    if status != "success" or not expiry:
+        await update.message.reply_text(
+            tr(language, "admin_premium_grant_error")
+        )
+        return
+
+    expiry_wib = expiry.astimezone(WIB).strftime("%Y-%m-%d %H:%M")
+    logger.info(
+        "Manual Premium grant: admin=%s user=%s days=%s expiry=%s",
+        user.id,
+        target_id,
+        days,
+        expiry_wib,
+    )
+    await update.message.reply_text(
+        tr(
+            language,
+            "admin_premium_grant_success",
+            user_id=target_id,
+            premium_until=expiry_wib,
+            days=days,
         ),
         parse_mode="HTML",
     )
@@ -2903,6 +3046,7 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("terms", terms_command))
         application.add_handler(CommandHandler("paysupport", payment_support_command))
         application.add_handler(CommandHandler("set_premium", set_premium_command))
+        application.add_handler(CommandHandler("grant_premium", grant_premium_command))
         application.add_handler(CommandHandler("language", language_command))
         application.add_handler(CommandHandler("menu", menu_command))
         application.add_handler(CommandHandler("bc", broadcast_command))

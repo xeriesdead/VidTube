@@ -72,4 +72,4 @@ they are easier to download again through Telegram's bot file-size limit.
 - Premium users can forward and save media sent through media links, manual broadcasts, and scheduled broadcasts. Media sent to non-Premium users remains protected.
 - `/premium` sells 30 days for 10 Telegram Stars. Telegram's successful payment activates it automatically; renewal is not automatic, and a new purchase extends an active term by 30 days.
 - `/saved` lists and reopens media saved from bot messages. Saved media is private to the owning account.
-- `/profile` shows Premium status and its expiry. Admins can still grant or revoke manual access with `/set_premium <user_id> on|off`.
+- `/profile` shows Premium status and its expiry. Admins can grant timed access with `/grant_premium <user_id> [days]` (30 days by default; 1–3650 days), or grant/revoke permanent manual access with `/set_premium <user_id> on|off`.
