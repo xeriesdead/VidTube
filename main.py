@@ -194,7 +194,7 @@ BOT_TEXT = {
         ),
         "admin_premium_error": "Status Premium tidak berhasil disimpan. Coba lagi.",
         "admin_premium_grant_usage": (
-            "Gunakan /grant_premium <user_id> [hari]. Default 30 hari; "
+            "Gunakan /addpremium <user_id> [hari]. Default 30 hari; "
             "masukkan 1–3650 hari."
         ),
         "admin_premium_grant_success": (
@@ -206,6 +206,13 @@ BOT_TEXT = {
         ),
         "admin_premium_grant_error": (
             "Premium manual tidak berhasil disimpan. Coba lagi."
+        ),
+        "admin_premium_remove_usage": (
+            "Gunakan /removepremium <user_id>."
+        ),
+        "admin_premium_remove_success": (
+            "✅ Akses Premium user <code>{user_id}</code> berhasil dicabut. "
+            "Riwayat pembayaran tidak dihapus."
         ),
         "language_button": "🌐 Bahasa",
         "help_button": "ℹ️ Bantuan",
@@ -317,7 +324,7 @@ BOT_TEXT = {
         ),
         "admin_premium_error": "Could not save the Premium status. Please try again.",
         "admin_premium_grant_usage": (
-            "Use /grant_premium <user_id> [days]. Defaults to 30 days; "
+            "Use /addpremium <user_id> [days]. Defaults to 30 days; "
             "enter 1–3650 days."
         ),
         "admin_premium_grant_success": (
@@ -329,6 +336,13 @@ BOT_TEXT = {
         ),
         "admin_premium_grant_error": (
             "Could not save manual Premium. Please try again."
+        ),
+        "admin_premium_remove_usage": (
+            "Use /removepremium <user_id>."
+        ),
+        "admin_premium_remove_success": (
+            "✅ Premium access for user <code>{user_id}</code> was revoked. "
+            "Payment history was not deleted."
         ),
         "language_button": "🌐 Language",
         "help_button": "ℹ️ Help",
@@ -1494,7 +1508,7 @@ async def set_premium_command(update, context):
         parse_mode="HTML",
     )
 
-async def grant_premium_command(update, context):
+async def add_premium_command(update, context):
     user = update.effective_user
     if not is_admin(user.id):
         await update.message.reply_text("❌ Admin only")
@@ -1564,6 +1578,50 @@ async def grant_premium_command(update, context):
             user_id=target_id,
             premium_until=expiry_wib,
             days=days,
+        ),
+        parse_mode="HTML",
+    )
+
+async def remove_premium_command(update, context):
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Admin only")
+        return
+
+    language = await get_user_language(user.id) or "id"
+    args = context.args or []
+    if len(args) != 1:
+        await update.message.reply_text(
+            tr(language, "admin_premium_remove_usage")
+        )
+        return
+
+    try:
+        target_id = int(args[0])
+    except (TypeError, ValueError):
+        target_id = 0
+    if target_id <= 0:
+        await update.message.reply_text(
+            tr(language, "admin_premium_remove_usage")
+        )
+        return
+
+    if not await set_user_premium(target_id, False):
+        await update.message.reply_text(
+            tr(language, "admin_premium_error")
+        )
+        return
+
+    logger.info(
+        "Manual Premium revoke: admin=%s user=%s",
+        user.id,
+        target_id,
+    )
+    await update.message.reply_text(
+        tr(
+            language,
+            "admin_premium_remove_success",
+            user_id=target_id,
         ),
         parse_mode="HTML",
     )
@@ -3046,7 +3104,8 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("terms", terms_command))
         application.add_handler(CommandHandler("paysupport", payment_support_command))
         application.add_handler(CommandHandler("set_premium", set_premium_command))
-        application.add_handler(CommandHandler("grant_premium", grant_premium_command))
+        application.add_handler(CommandHandler("addpremium", add_premium_command))
+        application.add_handler(CommandHandler("removepremium", remove_premium_command))
         application.add_handler(CommandHandler("language", language_command))
         application.add_handler(CommandHandler("menu", menu_command))
         application.add_handler(CommandHandler("bc", broadcast_command))
