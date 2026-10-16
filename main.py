@@ -30,7 +30,8 @@ from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButton,
-    ReplyKeyboardMarkup, BotCommand, LabeledPrice
+    ReplyKeyboardMarkup, BotCommand, LabeledPrice, InputMediaPhoto,
+    InputMediaVideo
 )
 from telegram.error import RetryAfter, Forbidden, BadRequest
 from telegram.ext import (
@@ -1446,15 +1447,7 @@ async def start_command(update, context):
     context.application.create_task(log_link_access(code, uid, username))
 
     sent_ids = []
-    send_tasks = []
-
-    for file_id, media_type, caption in media_list:
-        task = send_media_item(
-            context.bot, uid, file_id, media_type, caption, sent_ids, premium
-        )
-        send_tasks.append(task)
-
-    await asyncio.gather(*send_tasks, return_exceptions=True)
+    await send_media_items(context.bot, uid, media_list, sent_ids, premium)
 
     if sent_ids:
         media_message_ids = list(sent_ids)
@@ -1620,6 +1613,47 @@ async def send_media_item(
         logger.info(f"✅ Sent {media_type} to {uid}")
     except Exception as e:
         logger.error(f"Error sending {media_type} to {uid}: {e}")
+
+async def send_media_items(bot, uid, media_list, sent_ids, premium=False):
+    supported_media = [
+        item for item in media_list if item[1] in ("photo", "video")
+    ]
+
+    for start in range(0, len(supported_media), 10):
+        group = supported_media[start:start + 10]
+
+        if len(group) == 1:
+            await send_media_item(
+                bot, uid, *group[0], sent_ids, premium
+            )
+            continue
+
+        media = []
+        for file_id, media_type, caption in group:
+            media_class = (
+                InputMediaPhoto if media_type == "photo" else InputMediaVideo
+            )
+            media.append(media_class(media=file_id, caption=caption or None))
+
+        try:
+            messages = await bot.send_media_group(
+                chat_id=uid,
+                media=media,
+                protect_content=not premium,
+            )
+            sent_ids.extend(message.message_id for message in messages)
+            logger.info(f"✅ Sent album ({len(messages)} items) to {uid}")
+        except BadRequest as e:
+            logger.warning(
+                f"Telegram rejected media album for {uid}; "
+                f"falling back to individual media: {e}"
+            )
+            for file_id, media_type, caption in group:
+                await send_media_item(
+                    bot, uid, file_id, media_type, caption, sent_ids, premium
+                )
+        except Exception as e:
+            logger.error(f"Error sending media album to {uid}: {e}")
 
 async def upload_handler(update, context):
     uid = update.effective_user.id
