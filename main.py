@@ -138,7 +138,7 @@ class DatabasePool:
 
 db_pool: Optional[DatabasePool] = None
 WIB = timezone(timedelta(hours=7))
-TELEGRAM_STARS_PER_PREMIUM = 10
+TELEGRAM_STARS_PER_PREMIUM = 50
 PREMIUM_DURATION_DAYS = 30
 
 BOT_TEXT = {
@@ -146,8 +146,9 @@ BOT_TEXT = {
         "select_language": "🌐 Pilih bahasa / Select language 👇",
         "language_saved": "✅ Bahasa diatur ke Bahasa Indonesia.",
         "profile_button": "👤 Profil",
-        "premium_button": "⭐ Premium (10 Stars)",
-        "premium_buy_button": "⭐ Beli Premium · 10 Stars",
+        "premium_button": "⭐ Premium (50 Stars)",
+        "premium_buy_button": "⭐ Beli Premium · 50 Stars",
+        "premium_contact_admin_button": "💬 Hubungi Admin",
         "profile_premium": "├ STATUS PREMIUM",
         "premium_active": "Aktif",
         "premium_inactive": "Tidak aktif",
@@ -156,7 +157,7 @@ BOT_TEXT = {
         "premium_offer": (
             "⭐ <b>VidTube Premium</b>\n\n"
             "Teruskan atau simpan ke galeri Telegram media yang dikirim melalui bot.\n\n"
-            "Harga: <b>10 Telegram Stars</b>\n"
+            "Harga: <b>50 Telegram Stars</b>\n"
             "Masa aktif: <b>30 hari</b> sejak pembayaran berhasil. Tidak diperpanjang otomatis."
         ),
         "premium_invoice_title": "VidTube Premium 30 Hari",
@@ -227,7 +228,7 @@ BOT_TEXT = {
         "help": (
             "ℹ️ <b>Panduan Bot</b>\n\n"
             "• Buka media melalui link dari admin.\n"
-            "• Premium: 10 ⭐ untuk 30 hari; bisa meneruskan atau menyimpan media lewat Telegram. Beli lewat /premium.\n"
+            "• Premium: 50 ⭐ untuk 30 hari; bisa meneruskan atau menyimpan media lewat Telegram. Beli lewat /premium.\n"
             "• Gunakan /terms untuk ketentuan dan /paysupport untuk bantuan pembayaran.\n"
             "• Gunakan <b>Bahasa</b> untuk mengganti bahasa."
         ),
@@ -253,7 +254,7 @@ BOT_TEXT = {
         ),
         "payment_terms": (
             "<b>Ketentuan pembelian</b>\n\n"
-            "Premium berharga 10 Telegram Stars untuk 30 hari, aktif setelah pembayaran "
+            "Premium berharga 50 Telegram Stars untuk 30 hari, aktif setelah pembayaran "
             "terverifikasi, dan tidak diperpanjang otomatis. Pembelian saat Premium aktif "
             "menambahkan 30 hari dari tanggal kedaluwarsa saat ini.\n\n"
             "Untuk masalah pembayaran, gunakan /paysupport."
@@ -280,8 +281,9 @@ BOT_TEXT = {
         "select_language": "🌐 Pilih bahasa / Select language 👇",
         "language_saved": "✅ Language set to English.",
         "profile_button": "👤 Profile",
-        "premium_button": "⭐ Premium (10 Stars)",
-        "premium_buy_button": "⭐ Buy Premium · 10 Stars",
+        "premium_button": "⭐ Premium (50 Stars)",
+        "premium_buy_button": "⭐ Buy Premium · 50 Stars",
+        "premium_contact_admin_button": "💬 Contact Admin",
         "profile_premium": "├ PREMIUM STATUS",
         "premium_active": "Active",
         "premium_inactive": "Inactive",
@@ -290,7 +292,7 @@ BOT_TEXT = {
         "premium_offer": (
             "⭐ <b>VidTube Premium</b>\n\n"
             "Forward or save media from the bot using Telegram.\n\n"
-            "Price: <b>10 Telegram Stars</b>\n"
+            "Price: <b>50 Telegram Stars</b>\n"
             "Duration: <b>30 days</b> after successful payment. It does not renew automatically."
         ),
         "premium_invoice_title": "VidTube Premium · 30 Days",
@@ -359,7 +361,7 @@ BOT_TEXT = {
         "help": (
             "ℹ️ <b>Bot Guide</b>\n\n"
             "• Open media using a link shared by the admin.\n"
-            "• Premium: 10 ⭐ for 30 days; forward or save media using Telegram. Buy with /premium.\n"
+            "• Premium: 50 ⭐ for 30 days; forward or save media using Telegram. Buy with /premium.\n"
             "• Use /terms for purchase terms and /paysupport for payment help.\n"
             "• Use <b>Language</b> to change the bot language."
         ),
@@ -385,7 +387,7 @@ BOT_TEXT = {
         ),
         "payment_terms": (
             "<b>Purchase terms</b>\n\n"
-            "Premium costs 10 Telegram Stars for 30 days, starts after payment is "
+            "Premium costs 50 Telegram Stars for 30 days, starts after payment is "
             "verified, and does not renew automatically. A purchase made while Premium "
             "is active adds 30 days to the current expiry.\n\n"
             "For payment issues, use /paysupport."
@@ -997,12 +999,20 @@ async def menu_command(update, context):
     )
 
 def premium_purchase_keyboard(language):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            tr(language, "premium_buy_button"),
-            callback_data="premium_buy",
-        )
-    ]])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                tr(language, "premium_buy_button"),
+                callback_data="premium_buy",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                tr(language, "premium_contact_admin_button"),
+                url="https://t.me/xkrim_admin1?text=",
+            )
+        ],
+    ])
 
 async def send_premium_invoice(bot, user, language):
     payload = f"premium:{user.id}:{secrets.token_urlsafe(18)}"
@@ -1439,7 +1449,7 @@ async def register_bot_commands(bot):
         "id": [
             BotCommand("start", "Mulai bot"),
             BotCommand("profile", "Lihat profil"),
-            BotCommand("premium", "Beli Premium 30 hari (10 Stars)"),
+            BotCommand("premium", "Beli Premium 30 hari (50 Stars)"),
             BotCommand("terms", "Ketentuan pembelian"),
             BotCommand("paysupport", "Bantuan pembayaran Stars"),
             BotCommand("language", "Ganti bahasa"),
@@ -1448,7 +1458,7 @@ async def register_bot_commands(bot):
         "en": [
             BotCommand("start", "Start the bot"),
             BotCommand("profile", "View profile"),
-            BotCommand("premium", "Buy Premium for 30 days (10 Stars)"),
+            BotCommand("premium", "Buy Premium for 30 days (50 Stars)"),
             BotCommand("terms", "Purchase terms"),
             BotCommand("paysupport", "Telegram Stars payment help"),
             BotCommand("language", "Change language"),
