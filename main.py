@@ -173,10 +173,26 @@ BOT_TEXT = {
         "premium_payment_success": (
             "✅ Premium aktif sampai <b>{premium_until}</b> WIB."
         ),
+        "premium_manual_grant_notice": (
+            "🎉 <b>Premium aktif!</b>\n\n"
+            "Admin memberikan akses Premium sampai <b>{premium_until}</b> WIB. "
+            "Sekarang Anda dapat meneruskan atau menyimpan media dari bot "
+            "menggunakan Telegram."
+        ),
+        "premium_manual_grant_permanent_notice": (
+            "🎉 <b>Premium aktif permanen!</b>\n\n"
+            "Admin memberikan akses Premium tanpa batas waktu. "
+            "Sekarang Anda dapat meneruskan atau menyimpan media dari bot "
+            "menggunakan Telegram."
+        ),
         "admin_premium_usage": "Gunakan /set_premium <user_id> <on|off>.",
         "admin_premium_updated": (
             "✅ Status Premium user <code>{user_id}</code> diubah menjadi "
             "<b>{status}</b>."
+        ),
+        "admin_premium_notify_failed": (
+            "Status Premium berhasil disimpan, tetapi notifikasi gagal dikirim. "
+            "Pastikan user pernah memulai bot dan tidak memblokirnya."
         ),
         "admin_premium_error": "Status Premium tidak berhasil disimpan. Coba lagi.",
         "admin_premium_grant_usage": (
@@ -291,10 +307,24 @@ BOT_TEXT = {
         "premium_payment_success": (
             "✅ Premium is active until <b>{premium_until}</b> WIB."
         ),
+        "premium_manual_grant_notice": (
+            "🎉 <b>Premium is active!</b>\n\n"
+            "An admin granted Premium access until <b>{premium_until}</b> WIB. "
+            "You can now forward or save media from the bot using Telegram."
+        ),
+        "premium_manual_grant_permanent_notice": (
+            "🎉 <b>Premium is active permanently!</b>\n\n"
+            "An admin granted Premium access with no expiry. "
+            "You can now forward or save media from the bot using Telegram."
+        ),
         "admin_premium_usage": "Use /set_premium <user_id> <on|off>.",
         "admin_premium_updated": (
             "✅ Premium status for user <code>{user_id}</code> changed to "
             "<b>{status}</b>."
+        ),
+        "admin_premium_notify_failed": (
+            "Premium was saved, but the notification could not be delivered. "
+            "Make sure the user has started the bot and has not blocked it."
         ),
         "admin_premium_error": "Could not save the Premium status. Please try again.",
         "admin_premium_grant_usage": (
@@ -1162,6 +1192,32 @@ async def terms_command(update, context):
         parse_mode="HTML",
     )
 
+async def notify_manual_premium_grant(bot, target_id, premium_until=None):
+    try:
+        language = await get_user_language(target_id) or "id"
+        message_key = (
+            "premium_manual_grant_notice"
+            if premium_until
+            else "premium_manual_grant_permanent_notice"
+        )
+        await bot.send_message(
+            chat_id=target_id,
+            text=tr(
+                language,
+                message_key,
+                premium_until=premium_until or "",
+            ),
+            parse_mode="HTML",
+        )
+        return True
+    except Exception as e:
+        logger.warning(
+            "Could not notify user %s of manual Premium grant: %s",
+            target_id,
+            e,
+        )
+        return False
+
 async def set_premium_command(update, context):
     user = update.effective_user
     if not is_admin(user.id):
@@ -1187,6 +1243,13 @@ async def set_premium_command(update, context):
         await update.message.reply_text(tr(language, "admin_premium_error"))
         return
 
+    notification_sent = True
+    if is_enabled:
+        notification_sent = await notify_manual_premium_grant(
+            context.bot,
+            target_id,
+        )
+
     await update.message.reply_text(
         tr(
             language,
@@ -1196,6 +1259,10 @@ async def set_premium_command(update, context):
         ),
         parse_mode="HTML",
     )
+    if is_enabled and not notification_sent:
+        await update.message.reply_text(
+            tr(language, "admin_premium_notify_failed")
+        )
 
 async def add_premium_command(update, context):
     user = update.effective_user
@@ -1260,6 +1327,11 @@ async def add_premium_command(update, context):
         days,
         expiry_wib,
     )
+    notification_sent = await notify_manual_premium_grant(
+        context.bot,
+        target_id,
+        expiry_wib,
+    )
     await update.message.reply_text(
         tr(
             language,
@@ -1270,6 +1342,10 @@ async def add_premium_command(update, context):
         ),
         parse_mode="HTML",
     )
+    if not notification_sent:
+        await update.message.reply_text(
+            tr(language, "admin_premium_notify_failed")
+        )
 
 async def remove_premium_command(update, context):
     user = update.effective_user
