@@ -139,7 +139,6 @@ db_pool: Optional[DatabasePool] = None
 WIB = timezone(timedelta(hours=7))
 TELEGRAM_STARS_PER_PREMIUM = 10
 PREMIUM_DURATION_DAYS = 30
-SAVED_MEDIA_PAGE_SIZE = 8
 
 BOT_TEXT = {
     "id": {
@@ -148,7 +147,6 @@ BOT_TEXT = {
         "profile_button": "👤 Profil",
         "premium_button": "⭐ Premium (10 Stars)",
         "premium_buy_button": "⭐ Beli Premium · 10 Stars",
-        "premium_save_button": "💾 Simpan media",
         "profile_premium": "├ STATUS PREMIUM",
         "premium_active": "Aktif",
         "premium_inactive": "Tidak aktif",
@@ -156,15 +154,13 @@ BOT_TEXT = {
         "premium_no_expiry": "Aktif (akses admin)",
         "premium_offer": (
             "⭐ <b>VidTube Premium</b>\n\n"
-            "Simpan media yang dikirim melalui bot dan teruskan media yang tidak "
-            "dilindungi.\n\n"
+            "Teruskan atau simpan ke galeri Telegram media yang dikirim melalui bot.\n\n"
             "Harga: <b>10 Telegram Stars</b>\n"
             "Masa aktif: <b>30 hari</b> sejak pembayaran berhasil. Tidak diperpanjang otomatis."
         ),
         "premium_invoice_title": "VidTube Premium 30 Hari",
         "premium_invoice_description": (
-            "Akses Premium selama 30 hari untuk menyimpan media dan meneruskan "
-            "media yang tidak dilindungi."
+            "Akses Premium selama 30 hari untuk meneruskan atau menyimpan media melalui Telegram."
         ),
         "premium_invoice_label": "Premium 30 hari",
         "premium_invoice_failed": "Invoice Premium belum bisa dibuat. Coba lagi nanti.",
@@ -174,19 +170,8 @@ BOT_TEXT = {
             "Jangan bayar lagi; gunakan /paysupport agar admin memeriksanya."
         ),
         "premium_payment_success": (
-            "✅ Premium aktif sampai <b>{premium_until}</b> WIB. "
-            "Gunakan /saved untuk membuka media yang disimpan."
+            "✅ Premium aktif sampai <b>{premium_until}</b> WIB."
         ),
-        "premium_save_required": "Hanya pengguna Premium yang dapat menyimpan media.",
-        "private_chat_required": "Gunakan fitur ini di chat pribadi dengan bot.",
-        "premium_media_saved": "✅ Media disimpan. Buka kembali dengan /saved.",
-        "premium_media_duplicate": "Media ini sudah ada di daftar /saved.",
-        "premium_saved_empty": "Belum ada media tersimpan. Tekan tombol Simpan pada media dari bot.",
-        "premium_saved_title": "💾 <b>Media tersimpan</b>",
-        "premium_saved_open": "📂 Buka #{number}",
-        "premium_saved_opened": "Media tersimpan dikirim ulang.",
-        "premium_saved_missing": "Media tersimpan tidak ditemukan.",
-        "premium_saved_page": "Halaman {page}/{pages}",
         "admin_premium_usage": "Gunakan /set_premium <user_id> <on|off>.",
         "admin_premium_updated": (
             "✅ Status Premium user <code>{user_id}</code> diubah menjadi "
@@ -225,7 +210,7 @@ BOT_TEXT = {
         "help": (
             "ℹ️ <b>Panduan Bot</b>\n\n"
             "• Buka media melalui link dari admin.\n"
-            "• Premium: 10 ⭐ untuk 30 hari, menyimpan media dengan /saved; beli lewat /premium.\n"
+            "• Premium: 10 ⭐ untuk 30 hari; bisa meneruskan atau menyimpan media lewat Telegram. Beli lewat /premium.\n"
             "• Gunakan /terms untuk ketentuan dan /paysupport untuk bantuan pembayaran.\n"
             "• Gunakan <b>Bahasa</b> untuk mengganti bahasa."
         ),
@@ -280,7 +265,6 @@ BOT_TEXT = {
         "profile_button": "👤 Profile",
         "premium_button": "⭐ Premium (10 Stars)",
         "premium_buy_button": "⭐ Buy Premium · 10 Stars",
-        "premium_save_button": "💾 Save media",
         "profile_premium": "├ PREMIUM STATUS",
         "premium_active": "Active",
         "premium_inactive": "Inactive",
@@ -288,13 +272,13 @@ BOT_TEXT = {
         "premium_no_expiry": "Active (admin access)",
         "premium_offer": (
             "⭐ <b>VidTube Premium</b>\n\n"
-            "Save media sent through the bot and forward media that is not protected.\n\n"
+            "Forward or save media from the bot using Telegram.\n\n"
             "Price: <b>10 Telegram Stars</b>\n"
             "Duration: <b>30 days</b> after successful payment. It does not renew automatically."
         ),
         "premium_invoice_title": "VidTube Premium · 30 Days",
         "premium_invoice_description": (
-            "30 days of Premium access to save media and forward media that is not protected."
+            "30 days of Premium access to forward or save media using Telegram."
         ),
         "premium_invoice_label": "Premium for 30 days",
         "premium_invoice_failed": "Could not create a Premium invoice. Please try again later.",
@@ -304,19 +288,8 @@ BOT_TEXT = {
             "Do not pay again; use /paysupport so an admin can review it."
         ),
         "premium_payment_success": (
-            "✅ Premium is active until <b>{premium_until}</b> WIB. "
-            "Use /saved to reopen saved media."
+            "✅ Premium is active until <b>{premium_until}</b> WIB."
         ),
-        "premium_save_required": "Only Premium users can save media.",
-        "private_chat_required": "Use this feature in a private chat with the bot.",
-        "premium_media_saved": "✅ Media saved. Reopen it with /saved.",
-        "premium_media_duplicate": "This media is already in your /saved list.",
-        "premium_saved_empty": "No saved media yet. Press Save on media sent by the bot.",
-        "premium_saved_title": "💾 <b>Saved media</b>",
-        "premium_saved_open": "📂 Open #{number}",
-        "premium_saved_opened": "Saved media sent again.",
-        "premium_saved_missing": "Saved media was not found.",
-        "premium_saved_page": "Page {page}/{pages}",
         "admin_premium_usage": "Use /set_premium <user_id> <on|off>.",
         "admin_premium_updated": (
             "✅ Premium status for user <code>{user_id}</code> changed to "
@@ -355,7 +328,7 @@ BOT_TEXT = {
         "help": (
             "ℹ️ <b>Bot Guide</b>\n\n"
             "• Open media using a link shared by the admin.\n"
-            "• Premium: 10 ⭐ for 30 days; save media with /saved and buy with /premium.\n"
+            "• Premium: 10 ⭐ for 30 days; forward or save media using Telegram. Buy with /premium.\n"
             "• Use /terms for purchase terms and /paysupport for payment help.\n"
             "• Use <b>Language</b> to change the bot language."
         ),
@@ -427,14 +400,6 @@ def command_keyboard(language):
         one_time_keyboard=False,
         input_field_placeholder=text["menu_placeholder"],
     )
-
-def save_media_keyboard(uid, language):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            tr(language, "premium_save_button"),
-            callback_data=f"save_media:{uid}",
-        )
-    ]])
 
 def language_keyboard():
     return ReplyKeyboardMarkup(
@@ -523,22 +488,6 @@ async def init_db():
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_premium_invoice "
             "ON premium_payments(invoice_payload, user_id, status)"
-        )
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS saved_media(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                file_id TEXT NOT NULL,
-                type TEXT NOT NULL,
-                caption TEXT DEFAULT '',
-                saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, file_id)
-            )
-        """)
-        c.execute(
-            "CREATE INDEX IF NOT EXISTS idx_saved_media_user "
-            "ON saved_media(user_id, saved_at DESC)"
         )
 
         existing_cols = [row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()]
@@ -922,56 +871,6 @@ async def get_media_by_code(code) -> List[Tuple]:
         (code,)
     )
 
-async def add_saved_media(uid, file_id, media_type, caption=""):
-    async with db_pool.write_lock:
-        conn = await db_pool.get()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO saved_media (user_id, file_id, type, caption)
-                VALUES (?, ?, ?, ?)
-                """,
-                (uid, file_id, media_type, caption or ""),
-            )
-            inserted = cursor.rowcount == 1
-            conn.commit()
-            return inserted
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            await db_pool.put(conn)
-
-async def count_saved_media(uid):
-    row = await db_pool.execute_read(
-        "SELECT COUNT(*) FROM saved_media WHERE user_id=?",
-        (uid,),
-        fetch_one=True,
-    )
-    return int(row[0] or 0) if row else 0
-
-async def list_saved_media(uid, limit=SAVED_MEDIA_PAGE_SIZE, offset=0):
-    return await db_pool.execute_read(
-        """
-        SELECT id, type, caption FROM saved_media
-        WHERE user_id=?
-        ORDER BY saved_at DESC, id DESC
-        LIMIT ? OFFSET ?
-        """,
-        (uid, limit, offset),
-    )
-
-async def get_saved_media(uid, media_id):
-    return await db_pool.execute_read(
-        """
-        SELECT file_id, type, caption FROM saved_media
-        WHERE id=? AND user_id=?
-        """,
-        (media_id, uid),
-        fetch_one=True,
-    )
-
 async def increment_clicks(code):
     try:
         await db_pool.execute_write(
@@ -1262,217 +1161,6 @@ async def terms_command(update, context):
         parse_mode="HTML",
     )
 
-def media_details_from_message(message):
-    for attribute, media_type in (
-        ("photo", "photo"),
-        ("video", "video"),
-        ("document", "document"),
-        ("animation", "animation"),
-        ("audio", "audio"),
-        ("voice", "voice"),
-        ("video_note", "video_note"),
-        ("sticker", "sticker"),
-    ):
-        media = getattr(message, attribute, None)
-        if not media:
-            continue
-        if media_type == "photo":
-            media = media[-1]
-        return media.file_id, media_type, message.caption or ""
-    return None
-
-async def send_saved_media_file(bot, uid, file_id, media_type, caption=""):
-    options = {"caption": caption or "", "protect_content": False}
-    if media_type == "photo":
-        return await bot.send_photo(uid, file_id, **options)
-    if media_type == "video":
-        return await bot.send_video(uid, file_id, **options)
-    if media_type == "document":
-        return await bot.send_document(uid, file_id, **options)
-    if media_type == "animation":
-        return await bot.send_animation(uid, file_id, **options)
-    if media_type == "audio":
-        return await bot.send_audio(uid, file_id, **options)
-    if media_type == "voice":
-        return await bot.send_voice(uid, file_id, **options)
-    if media_type == "video_note":
-        return await bot.send_video_note(uid, file_id, protect_content=False)
-    if media_type == "sticker":
-        return await bot.send_sticker(uid, file_id, protect_content=False)
-    raise ValueError(f"Unsupported saved media type: {media_type}")
-
-async def build_saved_media_view(uid, language, page=0):
-    total = await count_saved_media(uid)
-    if total == 0:
-        return tr(language, "premium_saved_empty"), None
-
-    pages = max(1, (total + SAVED_MEDIA_PAGE_SIZE - 1) // SAVED_MEDIA_PAGE_SIZE)
-    page = min(max(0, page), pages - 1)
-    rows = await list_saved_media(
-        uid,
-        limit=SAVED_MEDIA_PAGE_SIZE,
-        offset=page * SAVED_MEDIA_PAGE_SIZE,
-    )
-    keyboard_rows = []
-    for index, (media_id, media_type, _caption) in enumerate(
-        rows, start=page * SAVED_MEDIA_PAGE_SIZE + 1
-    ):
-        keyboard_rows.append([InlineKeyboardButton(
-            f"📂 {index}. {media_type}",
-            callback_data=f"saved_open:{uid}:{media_id}",
-        )])
-
-    navigation = []
-    if page > 0:
-        navigation.append(InlineKeyboardButton(
-            "⬅️",
-            callback_data=f"saved_page:{uid}:{page - 1}",
-        ))
-    if page + 1 < pages:
-        navigation.append(InlineKeyboardButton(
-            "➡️",
-            callback_data=f"saved_page:{uid}:{page + 1}",
-        ))
-    if navigation:
-        keyboard_rows.append(navigation)
-
-    text = (
-        f"{tr(language, 'premium_saved_title')}\n\n"
-        f"{tr(language, 'premium_saved_page', page=page + 1, pages=pages)}"
-    )
-    return text, InlineKeyboardMarkup(keyboard_rows)
-
-async def saved_media_command(update, context):
-    user = update.effective_user
-    language = await get_user_language(user.id) or "id"
-    if not update.effective_chat or update.effective_chat.type != "private":
-        await update.effective_message.reply_text(
-            tr(language, "private_chat_required")
-        )
-        return
-    await save_user(user.id, user.username or "unknown")
-    if not await is_premium_user(user.id):
-        await update.effective_message.reply_text(
-            f"{tr(language, 'premium_offer')}\n\n"
-            f"{tr(language, 'premium_save_required')}",
-            parse_mode="HTML",
-            reply_markup=premium_purchase_keyboard(language),
-        )
-        return
-
-    text, reply_markup = await build_saved_media_view(user.id, language)
-    await update.effective_message.reply_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=reply_markup,
-    )
-
-async def save_media_callback(update, context):
-    query = update.callback_query
-    user = query.from_user
-    language = await get_user_language(user.id) or "id"
-    try:
-        owner_id = int(query.data.split(":", 1)[1])
-    except (AttributeError, IndexError, TypeError, ValueError):
-        await query.answer(tr(language, "premium_saved_missing"), show_alert=True)
-        return
-
-    if user.id != owner_id:
-        await query.answer(tr(language, "notification_not_yours"), show_alert=True)
-        return
-    if not query.message or query.message.chat.type != "private":
-        await query.answer(tr(language, "private_chat_required"), show_alert=True)
-        return
-    if not await is_premium_user(user.id):
-        await query.answer(tr(language, "premium_save_required"), show_alert=True)
-        if query.message:
-            await query.message.reply_text(
-                tr(language, "premium_offer"),
-                parse_mode="HTML",
-                reply_markup=premium_purchase_keyboard(language),
-            )
-        return
-
-    details = media_details_from_message(query.message) if query.message else None
-    if not details:
-        await query.answer(tr(language, "premium_saved_missing"), show_alert=True)
-        return
-
-    file_id, media_type, caption = details
-    inserted = await add_saved_media(user.id, file_id, media_type, caption)
-    await query.answer(
-        tr(language, "premium_media_saved" if inserted else "premium_media_duplicate"),
-        show_alert=not inserted,
-    )
-
-async def saved_media_page_callback(update, context):
-    query = update.callback_query
-    language = await get_user_language(query.from_user.id) or "id"
-    try:
-        _, owner_id, page = query.data.split(":", 2)
-        owner_id = int(owner_id)
-        page = int(page)
-    except (AttributeError, TypeError, ValueError):
-        await query.answer(tr(language, "premium_saved_missing"), show_alert=True)
-        return
-
-    if query.from_user.id != owner_id:
-        await query.answer(tr(language, "notification_not_yours"), show_alert=True)
-        return
-    if not query.message or query.message.chat.type != "private":
-        await query.answer(tr(language, "private_chat_required"), show_alert=True)
-        return
-    if not await is_premium_user(owner_id):
-        await query.answer(tr(language, "premium_save_required"), show_alert=True)
-        return
-
-    text, reply_markup = await build_saved_media_view(owner_id, language, page)
-    await query.answer()
-    if query.message:
-        await query.edit_message_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
-
-async def saved_media_open_callback(update, context):
-    query = update.callback_query
-    user = query.from_user
-    language = await get_user_language(user.id) or "id"
-    try:
-        _, owner_id, media_id = query.data.split(":", 2)
-        owner_id = int(owner_id)
-        media_id = int(media_id)
-    except (AttributeError, TypeError, ValueError):
-        await query.answer(tr(language, "premium_saved_missing"), show_alert=True)
-        return
-
-    if user.id != owner_id:
-        await query.answer(tr(language, "notification_not_yours"), show_alert=True)
-        return
-    if not query.message or query.message.chat.type != "private":
-        await query.answer(tr(language, "private_chat_required"), show_alert=True)
-        return
-    if not await is_premium_user(user.id):
-        await query.answer(tr(language, "premium_save_required"), show_alert=True)
-        return
-
-    media = await get_saved_media(user.id, media_id)
-    if not media:
-        await query.answer(tr(language, "premium_saved_missing"), show_alert=True)
-        return
-
-    try:
-        await send_saved_media_file(context.bot, user.id, *media)
-        await query.answer(tr(language, "premium_saved_opened"))
-    except Exception:
-        logger.exception(
-            "Could not resend saved media for user=%s media_id=%s",
-            user.id,
-            media_id,
-        )
-        await query.answer(tr(language, "premium_saved_missing"), show_alert=True)
-
 async def set_premium_command(update, context):
     user = update.effective_user
     if not is_admin(user.id):
@@ -1675,7 +1363,6 @@ async def register_bot_commands(bot):
             BotCommand("start", "Mulai bot"),
             BotCommand("profile", "Lihat profil"),
             BotCommand("premium", "Beli Premium 30 hari (10 Stars)"),
-            BotCommand("saved", "Buka media tersimpan"),
             BotCommand("terms", "Ketentuan pembelian"),
             BotCommand("paysupport", "Bantuan pembayaran Stars"),
             BotCommand("language", "Ganti bahasa"),
@@ -1685,7 +1372,6 @@ async def register_bot_commands(bot):
             BotCommand("start", "Start the bot"),
             BotCommand("profile", "View profile"),
             BotCommand("premium", "Buy Premium for 30 days (10 Stars)"),
-            BotCommand("saved", "Open saved media"),
             BotCommand("terms", "Purchase terms"),
             BotCommand("paysupport", "Telegram Stars payment help"),
             BotCommand("language", "Change language"),
@@ -1913,15 +1599,12 @@ async def send_media_item(
     bot, uid, file_id, media_type, caption, sent_ids, premium=False
 ):
     try:
-        language = await get_user_language(uid) or "id"
-        reply_markup = save_media_keyboard(uid, language)
         if media_type == "photo":
             msg = await bot.send_photo(
                 uid,
                 file_id,
                 caption=caption or "",
                 protect_content=not premium,
-                reply_markup=reply_markup,
             )
         elif media_type == "video":
             msg = await bot.send_video(
@@ -1929,7 +1612,6 @@ async def send_media_item(
                 file_id,
                 caption=caption or "",
                 protect_content=not premium,
-                reply_markup=reply_markup,
             )
         else:
             return
@@ -2018,7 +1700,6 @@ async def broadcast_command(update, context):
         return
 
     msg_to_send = update.message.reply_to_message
-    can_save_media = media_details_from_message(msg_to_send) is not None
     users = await db_pool.execute_read("SELECT user_id FROM users")
     total = len(users)
 
@@ -2043,10 +1724,6 @@ async def broadcast_command(update, context):
         for i, row in enumerate(users):
             user_id = row[0]
             premium = await is_premium_user(user_id)
-            copy_options = {}
-            if can_save_media:
-                language = await get_user_language(user_id) or "id"
-                copy_options["reply_markup"] = save_media_keyboard(user_id, language)
 
             if not _active_broadcasts.get(uid):
                 break
@@ -2059,7 +1736,6 @@ async def broadcast_command(update, context):
                             msg_to_send.effective_attachment is not None
                             and not premium
                         ),
-                        **copy_options,
                     ),
                     timeout=10.0
                 )
@@ -2081,7 +1757,6 @@ async def broadcast_command(update, context):
                                 msg_to_send.effective_attachment is not None
                                 and not premium
                             ),
-                            **copy_options,
                         ),
                         timeout=10.0
                     )
@@ -2311,27 +1986,21 @@ async def _send_one_scheduled(
         await bot.send_message(user_id, text_content)
         return
 
-    language = await get_user_language(user_id) or "id"
-    reply_markup = save_media_keyboard(user_id, language)
     if msg_type == "photo":
         await bot.send_photo(
             user_id, file_id, caption=cap, protect_content=not premium,
-            reply_markup=reply_markup,
         )
     elif msg_type == "video":
         await bot.send_video(
             user_id, file_id, caption=cap, protect_content=not premium,
-            reply_markup=reply_markup,
         )
     elif msg_type == "document":
         await bot.send_document(
             user_id, file_id, caption=cap, protect_content=not premium,
-            reply_markup=reply_markup,
         )
     elif msg_type == "animation":
         await bot.send_animation(
             user_id, file_id, caption=cap, protect_content=not premium,
-            reply_markup=reply_markup,
         )
 
 async def _execute_scheduled_broadcast(row):
@@ -3082,25 +2751,12 @@ async def lifespan(fastapi_app: FastAPI):
             premium_buy_callback,
             pattern=r"^premium_buy$",
         ))
-        application.add_handler(CallbackQueryHandler(
-            save_media_callback,
-            pattern=r"^save_media:\d+$",
-        ))
-        application.add_handler(CallbackQueryHandler(
-            saved_media_page_callback,
-            pattern=r"^saved_page:\d+:\d+$",
-        ))
-        application.add_handler(CallbackQueryHandler(
-            saved_media_open_callback,
-            pattern=r"^saved_open:\d+:\d+$",
-        ))
         application.add_handler(PreCheckoutQueryHandler(pre_checkout_query_handler))
         application.add_handler(
             MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler)
         )
         application.add_handler(CommandHandler("profile", profile_command))
         application.add_handler(CommandHandler("premium", premium_command))
-        application.add_handler(CommandHandler("saved", saved_media_command))
         application.add_handler(CommandHandler("terms", terms_command))
         application.add_handler(CommandHandler("paysupport", payment_support_command))
         application.add_handler(CommandHandler("set_premium", set_premium_command))
